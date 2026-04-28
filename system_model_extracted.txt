@@ -1,0 +1,384 @@
+
+--- PAGE 1 ---
+Speaker:鄭昀曜
+Supervisor : 張敏寬 教授 ,
+杜俊育 教授
+2025/03/18
+Uplink Resource Allocation for eMBB-URLLC Coexistence in 
+Multi-UA V Networks
+
+--- PAGE 2 ---
+UA V-Assisted Multiplexing of eMBB and URLLC
+1
+• We consider a multi-UA V assisted uplink communication networksupporting the coexistence of 
+eMBB and URLLC services.
+• In the considered system, a set of ground users transmit uplink data to aerial access points (UA Vs), 
+which are ABS. Each UA V serves a group of users through uplink wireless access links.
+• To improve spectral efficiency, NOMA is employed so that an eMBB user and a URLLC user may 
+share the same resource block.
+• At the UA V receiver , successive interference cancellation (SIC) is used to separate the 
+superposed signals.
+• We denote the UA V set by 
+𝑁 = 1,2, … , 𝑛
+• The eMBB user set 
+𝐸 = {1,2, … , 𝑒}
+• The URLLC user set
+𝑈 = {1,2, … , 𝑢}
+• Let 𝜙𝑖,𝑗
+𝑡 ∈ 0 1 denote whether user 𝑖is associated with UA V 𝑗at slot 𝑡. Each user is associated 
+with one UA V .
+The time axis is divided into slots indexed by 𝑡 ∈ 𝑇, and each slot is further partitioned into S minislots
+indexed by s ∈ 𝒮 ≜ {1,2, … , S} .The system bandwidth is divided into K RBs indexed by k ∈ 𝒦 ≜
+= {1,2, … , K} .
+
+
+--- PAGE 3 ---
+Propagation Model
+3
+• For the uplink transmission from a ground user 𝑖 ∈ 𝐸 ∪ 𝑈 to UA V j ∈ 𝑁, 
+the air-to-ground (A2G) channel is modeled as a probabilistic LoS/NLoS
+channel.
+• The distance between ground user i and UA V j is given by 
+𝑑𝑖,𝑗(t) = 𝑑𝑖,𝑗
+ℎ (t)
+2
++ 𝐻𝑗
+2
+• The elevation angle is defined as
+𝜃𝑖,𝑗(𝑡) = 180
+𝜋 arctan(
+𝐻𝑗
+𝑑𝑖,𝑗
+ℎ (𝑡))
+• Following the commonly used probabilistic A2G model, the LoS
+probability is given by
+𝑃𝑖,𝑗
+𝐿𝑜𝑆 𝑡 = 1
+1 + 𝑎 exp −𝑏 𝜃𝑖,𝑗(𝑡) − 𝑎
+.
+• Hence, the non-line-of-sight (NLoS) probability is 
+𝑃𝑖,𝑗
+𝑁𝐿𝑜𝑆 𝑡 = 1 − 𝑃𝑖,𝑗
+𝐿𝑜𝑆 𝑡 .
+• The path loss under LoS and NLoS conditions is written as
+𝑃𝐿𝑖,𝑗
+𝐿𝑜𝑆 𝑡 = 𝐹𝑆𝑃𝐿𝑖,𝑗 𝑡 + 𝜂𝐿𝑜𝑆.
+𝑃𝐿𝑖,𝑗
+𝑁𝐿𝑜𝑆 𝑡 = 𝐹𝑆𝑃𝐿𝑖,𝑗 𝑡 + 𝜂𝑁𝐿𝑜𝑆.
+• Where
+𝐹𝑆𝑃𝐿𝑖,𝑗 𝑡 = 20𝑙𝑜𝑔10 𝑑𝑖,𝑗(𝑡) + 20𝑙𝑜𝑔10 𝑓𝑐 + 20𝑙𝑜𝑔10
+4𝜋
+𝑐 .
+The average large-scale path loss is
+𝑃𝐿𝑖,𝑗 𝑡 = 𝑃𝑖,𝑗
+𝐿𝑜𝑆 𝑡 𝑃𝐿𝑖,𝑗
+𝐿𝑜𝑆 𝑡 + 1 − 𝑃𝑖,𝑗
+𝐿𝑜𝑆 𝑡 𝑃𝐿𝑖,𝑗
+𝑁𝐿𝑜𝑆 𝑡 .
+The corresponding large-scale channel gain is
+𝛽𝑖,𝑗(𝑡) = 10−𝑃𝐿𝑖,𝑗 𝑡 /10.
+Finally, the channel coefficient is modeled as
+ℎ𝑖,𝑗(𝑡) = 𝛽𝑖,𝑗 𝑡 𝑔𝑖,𝑗(𝑡).
+where 𝑔𝑖,𝑗 ​ denotes the small-scale fading coefficient.
+For analytical tractability, we assume block fading within one time slot 
+and let
+𝑔𝑖,𝑗(𝑡) ∼ 𝒞𝒩 0,1 .
+Symbol Description
+𝑖 Ground user index
+𝑗 UAV index
+𝑑𝑖,𝑗
+ℎ (t) Horizontal distance between ground user i and UAV j at time slot t
+𝐻𝑗 Altitude of UAV j
+𝑑𝑖,𝑗(t) Three−dimensional distance between ground user i and UAV j at time slot t
+𝜃𝑖,𝑗(𝑡) Elevation angle from ground user iii to UAV j
+𝑃𝑖,𝑗
+𝐿𝑜𝑆 𝑡 Probability that the A2G link between user i and UAV j is line-of-sight
+𝑃𝑖,𝑗
+𝑁𝐿𝑜𝑆 𝑡 Probability that the A2G link between user i and UAV j is non-line-of-sight
+𝛽𝑖,𝑗(𝑡) Large-scale channel gain between user i and UAV j
+ℎ𝑖,𝑗(𝑡) Complex channel coefficient of the A2G link
+𝑔𝑖,𝑗(𝑡) Small-scale fading coefficient
+
+--- PAGE 4 ---
+Signal Model and Coexistence Modes
+4
+• Receive signal
+𝜁𝑗 = ෍
+𝑞∈𝐸
+𝑝𝑞
+𝑡 ℎ𝑞,𝑗
+𝑡 𝜇𝑞 + ෍
+𝑧∈𝑈
+𝑝𝑧
+𝑠,𝑡ℎz,𝑗
+𝑡 𝜇z + 𝑛𝑗
+• The received signal is the superposition of:
+• uplink signals from eMBB users
+• uplink signals from URLLC users
+• 𝑛𝑗(𝑡) ~𝒞𝒩 0, 𝜎𝑗
+2 is the additive receiver noise.
+• Superposition and Puncturing Modes
+• Superposition Mode
+• Under superposition mode, the URLLC user is multiplexed with an 
+ongoing eMBB user on the same RB. This uplink non-orthogonal 
+transmission corresponds to the received signal model in (above)
+• We define the superposition indicator by
+𝜌q,z,k,j
+s,t ∈ {0,1}
+• Puncturing Mode
+• Under puncturing mode, the ongoing eMBB transmission is suspended in 
+minislot 𝑠, and the RB is exclusively used by the URLLC user. We define 
+the puncturing indicator by
+𝜚q,z,k,j
+s,t ∈ {0,1}
+Symbol Description
+𝑗 UAV index
+ζ𝑗 (𝑡) received signal at UAV 𝑗at time slot 𝑡
+E set of eMBB users
+U set of URLLC users
+𝑝𝑞𝑡 transmit power of eMBB user 𝑞
+𝑝𝑧
+𝑠,𝑡 transmit power of URLLC user 𝑧
+ℎ𝑞,𝑗
+𝑡 channel coefficient from eMBB user 𝑞to UAV 𝑗
+ℎz,𝑗
+𝑡 channel coefficient from URLLC user 𝑧to UAV 𝑗
+𝜇𝑞 transmitted symbol of eMBB user 𝑞
+𝜇z transmitted symbol of URLLC user 𝑧
+𝑛𝑗 additive white Gaussian noise at UAV 𝑗
+• Since one RB in one minislot can only be operated in one coexistence 
+mode
+𝜌q,𝐳,k,j
+s,t + 𝜚q,𝐳,k,j
+s,t = 1
+SIC Decoding Order
+• At the UA V receiver, SIC is adopted to decode the superposed uplink signals. Since 
+URLLC traffic is latency-critical, the URLLC packet is decoded before the eMBB
+packet.
+• Hence, the decoding order is:
+1. Decode the URLLC signal first;
+2. If the URLLC signal is successfully decoded, subtract it from the received 
+signal;
+3. Decode the eMBB signal from the residual signal.
+
+--- PAGE 5 ---
+SINR Model
+5
+• URLLC Decoding
+• URLLC SINR model with mode-switching
+𝛿𝑧,𝑗,𝑘
+𝑠,𝑡 =
+𝑝𝑧
+𝑠,𝑡 ℎ𝑧,𝑗
+𝑡 2
+𝜌𝑞,𝑧,𝑘,𝑗
+𝑠,𝑡 𝑝𝑞
+𝑡 ℎ𝑞,𝑗
+𝑡 2
++ 𝐼𝑗,𝑘
+𝑠,𝑡 + 𝜎𝑗
+2
+• eMBB Decoding
+• eMBB SINR model considering SIC residual and puncturing
+𝛿𝑞,𝑗,𝑘
+s,𝑡 = (1 − 𝜚q,z,k,j
+s,t )
+𝑝𝑞𝑡 ℎ𝑞,𝑗
+𝑡 2
+𝜂sic 𝑝𝑧
+𝑠,𝑡 ℎ𝑧,𝑗
+𝑡 2
++ 𝐼𝑗,𝑘
+𝑠,𝑡 + 𝜎𝑗
+2
+Aggregate Inter-Cell Interference
+𝐼𝑗,𝑘
+𝑠,𝑡
+= ෍
+𝑗′∈𝑁,𝑗′≠𝑗
+෍
+𝑞∈𝐸
+𝜙𝑞,𝑗′
+𝑡 (1 − 𝜚𝑞,𝑧,𝑘,𝑗′
+𝑠,𝑡 )𝑝𝑞𝑡 ℎ𝑞,𝑗
+𝑡 2
++ ෍
+𝑧∈𝑈
+𝜙𝑧,𝑗′
+𝑡 𝑝𝑧
+𝑠,𝑡 ℎ𝑧,𝑗
+𝑡 2
+Symbol Description
+𝑗 UAV index
+z URLLC user index
+q eMBB users index
+𝑝𝑧
+𝑠,𝑡 transmit power of URLLC user 𝑧
+ℎ𝑧,𝑗
+𝑡 channel coefficient from URLLC user 𝑧to UAV 𝑗
+𝑝𝑞𝑡 transmit power of eMBB user 𝑞
+ℎ𝑞,𝑗
+𝑡 channel coefficient from eMBB user 𝑞to UAV 𝑗
+𝐼𝑗 Aggregate Inter-Cell Interference
+𝜎𝑗
+2 noise power at UAV 𝑗
+𝜂sic Residual interference level (factor) from the URLLC user after cancellation
+
+--- PAGE 6 ---
+Rate Model
+6
+• URLLC rate model
+• By converting the finite-blocklength decoding requirement into a 
+minimum SINR condition, the target SINR threshold for URLLC user 
+𝑧is approximated as 
+Γ𝑧𝑡ℎ ≈ 2
+𝐿𝑧
+𝜏𝐵𝑘
++ 𝑉0
+𝑚𝑧,𝑘
+𝑠,𝑡 𝑄−1 𝜖𝑧
+− 1
+• where 𝐿𝑧 is the URLLC payload size, 𝜏 is the minislot duration, 𝐵𝑘 is the 
+RB bandwidth, 𝑚𝑧,𝑘
+𝑠,𝑡 is the blocklength, 𝜖𝑧 is the target decoding error 
+probability, and 𝑉0 is the approximated channel dispersion term.
+Symbol Description
+𝑞 Index of an eMBB user
+𝑧 Index of a URLLC user
+𝑗 Index of UAV (serving access point)
+𝑘 Index of resource block (RB)
+𝑠 Index of minislot
+𝑡 Time slot index
+𝐿𝑧 Payload size of the URLLC packet of user z
+𝜏 Mini-slot duration
+𝐵𝑘 Bandwidth of resource block (k)
+δ𝑧,𝑗,𝑘
+s,t SINR of the URLLC user
+𝛿𝑧,𝑗,𝑘
+𝑠,𝑡,𝑠𝑝 SINR of URLLC user under superposition transmission
+δ𝑧,𝑗,k
+𝑈,𝑝𝑢𝑛 SINR of URLLC user under puncturing
+δ𝑞,𝑗,𝑘
+𝑠,𝑡,𝑆𝐼𝐶 SINR of eMBB user after successful SIC
+𝛿𝑞,𝑗,𝑘
+𝑠,𝑡,𝑟𝑒𝑠 SINR of eMBB user with imperfect SIC (residual interference)
+𝜌𝑞,𝑧,𝑘,𝑗
+𝑠,𝑡 Superposition indicator (1 if URLLC and eMBB share the RB, otherwise 0)
+𝜚𝑞,𝑧,𝑘,𝑗
+𝑠,𝑡 Puncturing indicator (1 if URLLC punctures the RB of eMBB, otherwise 0)
+𝑉0 Channel dispersion of the URLLC transmission
+m𝑧,k
+𝑠,𝑡 Blocklength of the URLLC packet
+𝜀𝑧 Target decoding error probability of URLLC
+𝑄−1() Inverse Gaussian Q-function
+• eMBB rate model
+𝑟𝑞,𝑗,k
+𝑠,𝑡 = 𝐵𝑘 log2 1 + 𝛿𝑞,𝑗,𝑘
+s,𝑡
+Let 𝛼𝑞,𝑗,𝑘
+𝐸 be the RB allocation indicator at time slot t, defined as:
+𝛼𝑞,𝑗,𝑘
+𝐸 = ቊ𝟏, 𝒊𝒇 𝑹𝑩 𝒌 𝒂𝒕 𝑼𝑨𝑽 𝒋 𝒊𝒔 𝒂𝒍𝒍𝒐𝒄𝒂𝒕𝒆𝒅 𝒕𝒐 𝒆𝑴𝑩𝑩 𝒖𝒔𝒆𝒓 𝒒
+𝟎, 𝒐𝒕𝒉𝒆𝒓𝒘𝒊𝒔𝒆
+𝑅𝑞,𝑗
+𝑠,𝑡 = ෍
+𝑘∈𝐾
+𝛼𝑞,𝑗,𝑘
+𝐸 𝑟𝑞,𝑗,k
+𝑠,𝑡
+
+--- PAGE 7 ---
+Problem formulation
+7
+Symbol Description
+𝑞 Index of an eMBB user
+𝑧 Index of a URLLC user
+𝑗 Index of UAV (serving access point)
+𝑘 Index of resource block (RB)
+𝑠 Index of minislot
+𝑡 Time slot index
+𝐸 Set of eMBB users
+𝑈 Set of URLLC users
+𝑁 Set of UAV
+𝒦 Set of RBs
+𝑺 Set of minislots
+𝑅𝑞,𝑗
+𝑠,𝑡 achievable rate of eMBB user q served by UAV j
+𝑅𝑧,𝑗
+𝑡 achievable rate of URLLC user z served by UAV j 
+𝐿𝑧 Payload size of the URLLC packet of user z
+𝑃𝑒 Decoding error probability of URLLC user z
+𝜖𝑧 tolerable decoding error probability of URLLC user z
+𝑅𝑞,𝑗,𝑚𝑖𝑛
+𝑠,𝑡 Minimum required rate of eMBB user q
+𝑝𝑞 Transmit power of eMBB user q in slot t
+𝑝𝑧 Transmit power of URLLC user z in slot t
+𝛼𝑞,𝑗,𝑘
+𝐸 RB allocation indicator for eMBB user q on RB k of UAV j in slot t
+𝜌𝑞,𝑧,𝑘,𝑗
+𝑠,𝑡 Superposition indicator (1 if URLLC and eMBB share the RB, otherwise 0)
+𝜚𝑞,𝑧,𝑘,𝑗
+𝑠,𝑡 Puncturing indicator (1 if URLLC punctures the RB of eMBB, otherwise 0)
+𝜏 Mini-slot duration
+max
+𝛼,𝜌,𝜚,𝑝
+෍
+𝒕∈𝑻
+෍
+𝐬∈𝑺
+෍
+𝑗∈𝑁
+෍
+𝑞∈𝐸
+𝑅𝑞,𝑗
+𝑠,𝑡
+s.t. 𝑥𝑗
+𝑚𝑖𝑛 ≤ 𝑥𝑗 ≤ 𝑥𝑗
+𝑚𝑎𝑥, 𝑦𝑗
+𝑚𝑖𝑛 ≤ 𝑦𝑗 ≤ 𝑦𝑗
+𝑚𝑎𝑥, 𝐻𝑗
+𝑚𝑖𝑛 ≤ 𝐻𝑗 ≤ 𝐻𝑗
+𝑚𝑎𝑥 ∀𝑗, t
+෍
+𝑗∈N
+𝜙𝑖,𝑗
+𝑡 = 1 ∀i, t
+𝛿𝑧,𝑗,𝑘
+𝑠,𝑡 > Γ𝑧𝑡ℎ ∀𝑧
+𝑅𝑞,𝑗
+𝑠,𝑡 ≥ 𝑅𝑞,𝑗,𝑚𝑖𝑛
+𝑠,𝑡 ∀𝑞, 𝑗
+0 ≤ 𝑝𝑞 ≤ 𝑃𝑞𝑚𝑎𝑥 ∀𝑞
+0 ≤ 𝑝𝑧 ≤ 𝑃𝑧𝑚𝑎𝑥 ∀𝑧
+෍
+𝑞∈𝐸
+𝛼𝑞,𝑗,𝑘
+𝐸 = 1 ∀𝑘, 𝑗, 𝑡
+ρ𝑞,𝑧,𝑘,𝑗
+𝑠,𝑡 ≤ 𝛼𝑞,𝑘,𝑗
+𝑡 , 𝜚𝑞,𝑧,𝑘,𝑗
+𝑠,𝑡 ≤ 𝛼𝑞,𝑘,𝑗
+𝑡 ∀𝑞, 𝑧, 𝑘, 𝑗, 𝑠, 𝑡
+𝜌q,z,k,j
+s,t + 𝜚q,z,k,j
+s,t = 1 ∀𝑞, 𝑧, 𝑘, 𝑗, 𝑠, 𝑡
+෍
+𝑞∈𝐸
+෍
+𝑧∈𝑈
+(𝜌q,z,k,j
+s,t + 𝜚q,z,k,j
+s,t ) = 1 ∀𝑘, 𝑗, 𝑠, 𝑡
+෍
+k∈𝒦
+෍
+𝑞∈𝐸
+෍
+𝑧∈𝑈
+(𝜌q,z,k,j
+s,t + 𝜚q,z,k,j
+s,t ) = |𝒦| ∀j, 𝑠, 𝑡
+𝛼𝑞,𝑗,𝑘
+𝐸 , 𝜌q,u,k,j
+s,t , 𝜚q,u,k,j
+s,t ∈ {0,1}
