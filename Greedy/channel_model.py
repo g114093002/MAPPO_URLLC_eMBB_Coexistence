@@ -17,6 +17,8 @@ class ChannelModel:
         self.last_topology = None
         self._cached_topology = None
         self._cached_topology_shape = None
+        self._nested_anchor_topology = None
+        self._nested_anchor_shape = None
 
     def set_seed(self, seed: int):
         """Reset the internal RNG so channel/topology generation is repeatable."""
@@ -28,22 +30,11 @@ class ChannelModel:
         self._cached_topology = None
         self._cached_topology_shape = None
         self.last_topology = None
+        self._nested_anchor_topology = None
+        self._nested_anchor_shape = None
 
-    def generate_topology(self, num_users, num_uavs):
-        """
-        Generate a 2D topology that can be visualized directly.
-
-        Users are placed around UAV-centered clusters so that the strongest-UAV
-        association corresponds to a meaningful spatial grouping.
-        """
-        requested_shape = (num_users, num_uavs)
-        if (
-            self._cached_topology is not None and
-            self._cached_topology_shape == requested_shape
-        ):
-            self.last_topology = self._cached_topology
-            return self._cached_topology
-
+    def _build_topology(self, num_users: int, num_uavs: int):
+        """Build one full topology sample for a specific user/UAV shape."""
         if (
             hasattr(self.config, 'uav_positions') and
             self.config.uav_positions is not None and
@@ -91,6 +82,10 @@ class ChannelModel:
 
         configured_embb = int(getattr(self.config, 'num_embb_users', num_users))
         configured_urllc = int(getattr(self.config, 'num_urllc_users', 0))
+        nested_max_users = int(getattr(self.config, 'nested_load_max_total_users', 0) or 0)
+        if nested_max_users > 0 and int(num_users) == nested_max_users:
+            configured_embb = int(getattr(self.config, 'nested_load_max_embb_users', configured_embb) or configured_embb)
+            configured_urllc = int(getattr(self.config, 'nested_load_max_urllc_users', configured_urllc) or configured_urllc)
         if configured_embb + configured_urllc == num_users and configured_embb >= 0 and configured_urllc >= 0:
             embb_indices = np.arange(configured_embb, dtype=int)
             urllc_indices = np.arange(configured_embb, num_users, dtype=int)
@@ -110,7 +105,7 @@ class ChannelModel:
         distances = np.sqrt(horizontal_distances ** 2 + altitudes[None, :] ** 2)
         distances = np.clip(distances, self.config.reference_distance, None)
 
-        self._cached_topology = {
+        return {
             'user_positions': user_positions,
             'uav_positions': uav_positions,
             'horizontal_distances': horizontal_distances,
@@ -118,6 +113,39 @@ class ChannelModel:
             'distances': distances,
             'serving_hints': serving_hints
         }
+
+    def generate_topology(self, num_users, num_uavs):
+        """
+        Generate a 2D topology that can be visualized directly.
+
+        Users are placed around UAV-centered clusters so that the strongest-UAV
+        association corresponds to a meaningful spatial grouping.
+        """
+        requested_shape = (num_users, num_uavs)
+        if (
+            self._cached_topology is not None and
+            self._cached_topology_shape == requested_shape
+        ):
+            self.last_topology = self._cached_topology
+            return self._cached_topology
+        nested_enabled = bool(getattr(self.config, 'nested_load_from_max_users_enabled', False))
+        nested_max_users = int(getattr(self.config, 'nested_load_max_total_users', 0) or 0)
+        if nested_enabled and nested_max_users >= num_users:
+            anchor_shape = (nested_max_users, num_uavs)
+            if self._nested_anchor_topology is None or self._nested_anchor_shape != anchor_shape:
+                self._nested_anchor_topology = self._build_topology(nested_max_users, num_uavs)
+                self._nested_anchor_shape = anchor_shape
+            anchor = self._nested_anchor_topology
+            self._cached_topology = {
+                'user_positions': np.asarray(anchor['user_positions'][:num_users], dtype=float).copy(),
+                'uav_positions': np.asarray(anchor['uav_positions'], dtype=float).copy(),
+                'horizontal_distances': np.asarray(anchor['horizontal_distances'][:num_users], dtype=float).copy(),
+                'uav_altitudes': np.asarray(anchor['uav_altitudes'], dtype=float).copy(),
+                'distances': np.asarray(anchor['distances'][:num_users], dtype=float).copy(),
+                'serving_hints': np.asarray(anchor['serving_hints'][:num_users], dtype=int).copy(),
+            }
+        else:
+            self._cached_topology = self._build_topology(num_users, num_uavs)
         self._cached_topology_shape = requested_shape
         self.last_topology = self._cached_topology
         return self._cached_topology

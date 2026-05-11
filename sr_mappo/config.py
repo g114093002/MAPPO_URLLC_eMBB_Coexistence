@@ -82,6 +82,9 @@ class RewardConfig:
     terminal_urllc_admission_weight: float = 4.00
     terminal_urllc_admission_target: float = 0.78
     terminal_urllc_admission_penalty: float = 12.00
+    terminal_urllc_reliability_floor: float = 0.0
+    terminal_urllc_reliability_shortfall_penalty_weight: float = 0.0
+    terminal_urllc_reliability_hard_violation_penalty: float = 0.0
     terminal_embb_fairness_weight: float = 0.00
     terminal_embb_min_rate_penalty: float = 3.00
     terminal_embb_rate_normalizer: float = 5.0e6
@@ -236,6 +239,13 @@ class RewardConfig:
     phase_a_power_write_ratio_penalty_weight: float = 0.0
     phase_a_power_delta_l2_penalty_weight: float = 0.0
     phase_a_power_cellwise_flattening_penalty_weight: float = 0.0
+    phase_a_interference_reduction_bonus_weight: float = 0.5
+    phase_a_power_change_penalty_weight: float = 0.05
+    phase_a_power_reduction_l2_penalty_weight: float = 0.0
+    phase_a_power_saturation_penalty_weight: float = 0.0
+    phase_a_power_saturation_threshold: float = 0.9
+    embb_service_floor_hinge_penalty_weight: float = 0.0
+    embb_service_floor_target: float = 0.55
     terminal_phase_a_effective_nonzero_floor_penalty_weight: float = 0.0
     terminal_phase_a_effective_nonzero_floor: float = 0.15
     terminal_phase_a_abs_delta_floor_penalty_weight: float = 0.0
@@ -266,7 +276,22 @@ class EnvAdapterConfig:
     normalize_local_observation: bool = True
     normalize_global_observation: bool = True
     early_terminate_when_all_packets_scheduled: bool = False
+    # Runtime speedup for greedy-share experiments:
+    # when the per-episode share budget is exhausted, end episode early because
+    # no more URLLC admits can be accepted under the cap.
+    early_terminate_when_share_budget_exhausted: bool = True
     keep_unscheduled_packets_as_terminal_penalty: bool = True
+    # Candidate-supply controls:
+    # - False: packet is only visible at its release minislot (legacy non-carryover behavior).
+    # - True: packet stays visible from release minislot until scheduled or episode end.
+    allow_packet_carryover_across_minislots: bool = True
+    # Smart carryover pruning (active only when allow_packet_carryover_across_minislots=True):
+    # - If a packet has been infeasible for K consecutive minislots, drop it.
+    # - Also drop packets older than TTL minislots from release.
+    # Set to <=0 to disable each rule.
+    carryover_max_consecutive_infeasible: int = 0
+    carryover_packet_ttl_minislots: int = 8
+    carryover_prune_min_age_minislots: int = 1
     use_all_uavs_as_candidate_servers: bool = False
     include_greedy_reference_in_obs: bool = False
     multi_rb_agents: bool = False
@@ -295,6 +320,54 @@ class EnvAdapterConfig:
     disable_snapshot_imitation: bool = True
     allow_phase_a_embb_power_adjustment: bool = False
     allow_phase_a_power_on_keep: bool = False
+    # Greedy-only URLLC share gate (baseline ablation):
+    # cap URLLC admission by eMBB loss share relative to phase-0 snapshot baseline.
+    # - "none": disabled
+    # - "fixed_share": enforce candidate-level eMBB loss ratio cap:
+    #                  (baseline_rate - candidate_rate) / baseline_rate <= greedy_urllc_share_ratio
+    greedy_urllc_share_mode: str = "none"
+    greedy_urllc_share_ratio: float = 0.0
+    # Optional report-time fixed reference baseline for share semantics.
+    # Keys are load values (e.g. 5.0, 10.0), values are baseline pre-URLLC eMBB throughput in Mbps.
+    # When provided, hard-feasible greedy share cap is anchored to this fixed curve
+    # instead of the run-local dynamic reference.
+    greedy_share_reference_pre_mbps_by_load: Dict[float, float] = field(default_factory=dict)
+    # Hard-feasible greedy speed-up:
+    # prefilter candidate (packet,mode) pairs by lowest estimated eMBB loss,
+    # then run full feasibility checks only on the top-K pairs.
+    # Set <=0 to disable.
+    greedy_hf_prefilter_topk: int = 0
+    # Hard-feasible greedy: when True, ignore share-cap gating and evaluate
+    # all feasible admissions purely by throughput-loss objective.
+    hard_feasible_disable_share_cap: bool = True
+    # When True, relax prefilter masks for hard-feasible greedy diagnostics:
+    # expose candidate-mode pairs to HF evaluation first, then enforce hard
+    # feasibility inside `hard_feasible_throughput_greedy_action`.
+    greedy_hf_relax_prefilter_mask: bool = False
+    # Report-time hard-feasible greedy feasibility gate overrides (optional).
+    # Set <=0 to keep the underlying AlgorithmConfig defaults.
+    greedy_hf_min_noma_gain_ratio_override: float = -1.0
+    # Set to <= -100 to keep the underlying AlgorithmConfig default.
+    greedy_hf_embb_min_sic_snir_db_override: float = -100.0
+    # URLLC Poisson arrival semantics:
+    # - False: urllc_poisson_rate is total slot-level arrival rate (legacy behavior)
+    # - True:  urllc_poisson_rate is per-URLLC-user slot-level arrival rate, total scales with user count
+    urllc_poisson_rate_is_per_user: bool = False
+    # Hard cap for total URLLC packets generated per episode.
+    # Set <=0 to disable capping.
+    urllc_max_packets_per_episode: int = 64
+    # When there are URLLC candidates for the current decision cell, disallow KEEP.
+    # This applies to both MAPPO and greedy paths via shared action masks.
+    disallow_keep_when_urllc_pending: bool = True
+    # Optional report/compare override for user composition ratio.
+    # < 0 disables override. [0,1] maps to URLLC user ratio in density scenario setup.
+    urllc_user_ratio_override: float = -1.0
+    # Report/debug option: keep topology association fixed across episodes for
+    # the same environment instance (typically one load bucket in report sweep).
+    freeze_association_across_episodes: bool = False
+    # Report/debug option: keep channel gains fixed across episodes; only
+    # URLLC arrivals vary with per-episode random seed.
+    freeze_channel_gains_across_episodes: bool = False
     include_frontier_progress_obs: bool = False
     include_quota_progress_obs: bool = False
     phase_a_embb_power_delta_values: List[float] = field(default_factory=list)
@@ -306,6 +379,7 @@ class EnvAdapterConfig:
     # Phase-A eMBB power repair: negative-only (do not allow power increases).
     phase_a_negative_only_embb_power_repair: bool = True
     phase_a_embb_power_max_downscale_per_step: float = 0.05
+    phase_a_positive_boost_cap: float = 0.10
     phase_a_power_guard_floor_margin: float = 0.02
     phase0_owner_guard_enabled: bool = False
     phase0_owner_max_change_ratio: float = 1.0
@@ -314,13 +388,16 @@ class EnvAdapterConfig:
     phase0_owner_change_ratio_end: float = 0.30
     phase0_owner_change_warmup_iters: int = 1000
     phase0_owner_objective_eps: float = 1.0e-9
-    phase0_owner_objective_w_service: float = 1.0
-    phase0_owner_objective_w_minrate: float = 0.75
+    phase0_owner_objective_w_service: float = 1.75
+    phase0_owner_objective_w_minrate: float = 1.50
     phase0_owner_objective_w_rate: float = 0.50
-    phase0_owner_objective_w_intercell: float = 0.25
+    phase0_owner_objective_w_intercell: float = 1.50
     phase0_owner_objective_w_power: float = 0.20
     phase0_owner_objective_w_harm: float = 0.50
-    owner_objective_relax_eps: float = 0.02
+    owner_objective_relax_eps: float = 0.01
+    owner_objective_adaptive_k: float = 0.7
+    owner_objective_relax_margin: float = 0.5
+    owner_max_negative_accept_ratio: float = 0.30
     owner_service_drop_tol: float = 0.01
     owner_intercell_increase_tol: float = 0.02
     phase0_owner_change_budget_mode: str = "committed_only"  # "committed_only" or "full_snapshot_legacy"
@@ -456,6 +533,9 @@ class TrainingConfig:
     best_throughput_min_delta: float = 0.0
     selection_score_weights_by_load: Dict[float, float] = field(default_factory=dict)
     selection_throughput_ratio_floor_by_load: Dict[float, float] = field(default_factory=dict)
+    # Per-load ratio floors versus selected greedy baseline (policy / baseline).
+    selection_service_ratio_floor_by_load: Dict[float, float] = field(default_factory=dict)
+    selection_minrate_ratio_floor_by_load: Dict[float, float] = field(default_factory=dict)
     selection_reliability_floor: float = 0.0
     selection_power_ratio_ceiling_by_load: Dict[float, float] = field(default_factory=dict)
     selection_puncture_ratio_ceiling: float = 1.0
@@ -479,11 +559,11 @@ class TrainingConfig:
 
     use_load_curriculum: bool = True
     curriculum_stage_iterations: int = 40
-    curriculum_loads: List[float] = field(default_factory=lambda: list(range(8, 19)))
-    bc_loads: List[float] = field(default_factory=lambda: list(range(8, 19)))
-    eval_loads: List[float] = field(default_factory=lambda: [5.0, 10.0, 15.0, 20.0, 25.0])
-    coarse_eval_loads: List[float] = field(default_factory=lambda: [5.0, 10.0, 15.0, 20.0, 25.0])
-    dense_eval_loads: List[float] = field(default_factory=lambda: [5.0, 7.5, 10.0, 12.5, 15.0, 17.5, 20.0, 22.5, 25.0])
+    curriculum_loads: List[float] = field(default_factory=lambda: [9.0, 12.0, 15.0, 18.0, 21.0, 24.0])
+    bc_loads: List[float] = field(default_factory=lambda: [9.0, 12.0, 15.0, 18.0, 21.0, 24.0])
+    eval_loads: List[float] = field(default_factory=lambda: [9.0, 12.0, 15.0, 18.0, 21.0, 24.0])
+    coarse_eval_loads: List[float] = field(default_factory=lambda: [9.0, 12.0, 15.0, 18.0, 21.0, 24.0])
+    dense_eval_loads: List[float] = field(default_factory=lambda: [9.0, 12.0, 15.0, 18.0, 21.0, 24.0])
     eval_episodes_per_load: int = 6
     eval_replicas: int = 5
     puncture_loss_ceiling_by_load: Dict[float, float] = field(default_factory=dict)

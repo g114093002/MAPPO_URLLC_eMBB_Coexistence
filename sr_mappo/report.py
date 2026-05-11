@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
+import os
+import secrets
 import sys
 from pathlib import Path
 from datetime import datetime
 from time import perf_counter
 from typing import Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 import matplotlib
 
@@ -88,7 +91,11 @@ def _resolve_writable_results_dir(preferred: Path) -> Path:
     return preferred
 
 
-RESULTS_DIR = _resolve_writable_results_dir(PACKAGE_DIR / 'results')
+_RESULTS_DIR_OVERRIDE = os.environ.get("SR_MAPPO_RESULTS_DIR_OVERRIDE", "").strip()
+if _RESULTS_DIR_OVERRIDE:
+    RESULTS_DIR = _resolve_writable_results_dir(Path(_RESULTS_DIR_OVERRIDE))
+else:
+    RESULTS_DIR = _resolve_writable_results_dir(PACKAGE_DIR / 'results')
 CHECKPOINT_DIR = PROJECT_ROOT / 'checkpoints'
 DEFAULT_LOADS = list(SRMAPPOConfig().training.eval_loads)
 DEFAULT_EPISODES_PER_LOAD = 20
@@ -96,8 +103,12 @@ DIAGNOSTIC_EPISODES_PER_LOAD = 30  # For detailed diagnostic reports with 5x sam
 REPRESENTATIVE_LOAD = 25.0
 TIMESLOT_SERIES_LOAD = 25.0
 TIMESLOT_SERIES_SLOTS = 51
-FAST_LOADS = [10.0]
+# Fast mode now sweeps all standard loads (5~25) with minimal episodes per load,
+# so plots remain multi-point while runtime stays much lower than full report.
+FAST_LOADS = list(DEFAULT_LOADS)
 FAST_EPISODES_PER_LOAD = 1
+FAST_GREEDY_ONLY_EPISODES_PER_LOAD = 100
+FAST_GREEDY_ONLY_VERBOSE_PER_EPISODE = False
 FAST_TIMESLOT_SERIES_LOAD = 20.0
 FAST_TIMESLOT_SERIES_SLOTS = 20
 MODE_ORDER = [MODE_KEEP, MODE_OVERLAY, MODE_PUNCTURE]
@@ -129,11 +140,13 @@ CURRENT_TOP_LEVEL_REPORT_FILES = {
 }
 _REPORT_TIMING_ENABLED = False
 _REPORT_EPISODE_CACHE: Dict[Tuple, Dict] = {}
+_REPORT_EPISODE_CACHE_ENABLED = True
 _REPORT_PLOT_FALLBACK_WARNINGS: set[str] = set()
+_REPORT_RUN_SEED_BASE: Optional[int] = None
 
 
 def _report_log(message: str) -> None:
-    timestamp = np.datetime64('now')
+    timestamp = datetime.now(ZoneInfo("Asia/Taipei")).isoformat(timespec="seconds")
     print(f"[{timestamp}] [SR-MAPPO][REPORT] {message}", flush=True)
 
 
@@ -145,6 +158,27 @@ def _report_timing_log(message: str) -> None:
 
 def _reset_report_runtime_cache() -> None:
     _REPORT_EPISODE_CACHE.clear()
+
+
+def _init_report_run_seed_base(cfg: Optional[SRMAPPOConfig] = None) -> int:
+    """Pick a fresh seed base per report run.
+
+    Requirements:
+    - Different report invocations use different seed streams.
+    - Within one report run, all loads share the same episode-indexed seed stream.
+    - Different episodes use different seeds (base + ep).
+    """
+    cfg = cfg or SRMAPPOConfig()
+    fixed_seed_env = os.environ.get("SR_MAPPO_REPORT_SEED_BASE", "").strip()
+    if fixed_seed_env:
+        try:
+            return int(fixed_seed_env)
+        except ValueError:
+            pass
+    root = int(getattr(cfg.training, "train_seed", 42))
+    # Fresh per-invocation offset from OS entropy.
+    offset = int(secrets.randbelow(1_000_000_000))
+    return int(root + 1000 + offset)
 
 
 def _report_episode_cache_key(
@@ -327,6 +361,32 @@ def _base_profile() -> Tuple[float, float, bool]:
     )
 
 
+def _resolve_forced_urllc_ratio(report_cfg: SRMAPPOConfig) -> float:
+    """Resolve effective URLLC ratio for greedy report experiments.
+
+    Priority:
+    1) explicit `env.urllc_user_ratio_override`
+    2) known experiment-name hard mapping
+    3) no forcing (-1.0)
+    """
+    forced_ratio = float(getattr(report_cfg.env, "urllc_user_ratio_override", -1.0) or -1.0)
+    if forced_ratio >= 0.0:
+        return forced_ratio
+
+    exp_line = str(getattr(report_cfg.training, "experiment_line", "") or "").strip().lower()
+    if "v8_greedy_share10_debug" in exp_line or "v8_greedy_mix100_debug" in exp_line:
+        return 0.0
+    if "v8_greedy_mix73_debug" in exp_line:
+        return 0.3
+    if "v8_greedy_mix55_debug" in exp_line:
+        return 0.5
+    if "v8_greedy_mix37_debug" in exp_line:
+        return 0.7
+    if "v8_greedy_mix010_debug" in exp_line:
+        return 1.0
+    return -1.0
+
+
 def _load_to_lambda(load: float) -> float:
     base_total_per_uav, base_poisson, fixed_lambda = _base_profile()
     if fixed_lambda:
@@ -382,8 +442,11 @@ def _load_checkpoint_cfg(checkpoint_path: Path) -> SRMAPPOConfig:
 
 
 def _report_seed_base(load_idx: int, cfg: Optional[SRMAPPOConfig] = None) -> int:
+    _ = load_idx
+    if _REPORT_RUN_SEED_BASE is not None:
+        return int(_REPORT_RUN_SEED_BASE)
     cfg = cfg or SRMAPPOConfig()
-    return int(cfg.training.train_seed + 1000 + 100 * load_idx)
+    return int(getattr(cfg.training, "train_seed", 42) + 1000)
 
 
 def _primary_checkpoint_preference(cfg: Optional[SRMAPPOConfig] = None) -> str:
@@ -547,6 +610,8 @@ def _select_checkpoint(
         dict(getattr(cfg.training, "selection_admission_floor_by_load", {}) or {})
         or dict(getattr(cfg.training, "selection_power_ratio_ceiling_by_load", {}) or {})
         or dict(getattr(cfg.training, "selection_throughput_ratio_floor_by_load", {}) or {})
+        or dict(getattr(cfg.training, "selection_service_ratio_floor_by_load", {}) or {})
+        or dict(getattr(cfg.training, "selection_minrate_ratio_floor_by_load", {}) or {})
         or dict(getattr(cfg.training, "selection_puncture_ratio_floor_by_load", {}) or {})
         or dict(getattr(cfg.training, "selection_overlay_ratio_ceiling_by_load", {}) or {})
         or float(getattr(cfg.training, "selection_reliability_floor", 0.0) or 0.0) > 0.0
@@ -1011,6 +1076,10 @@ def _build_uav_ue_distribution_bundle(rl_rep: Dict[float, Dict], loads: List[flo
         rep = rl_rep.get(float(load), {}) if isinstance(rl_rep, dict) else {}
         embb = np.asarray(rep.get('per_uav_associated_embb', []), dtype=float)
         urllc = np.asarray(rep.get('per_uav_associated_urllc', []), dtype=float)
+        user_positions = np.asarray(rep.get('user_positions', []), dtype=float)
+        uav_positions = np.asarray(rep.get('uav_positions', []), dtype=float)
+        embb_user_count = int(float(rep.get('embb_user_count', 0.0) or 0.0))
+        urllc_user_count = int(float(rep.get('urllc_user_count', 0.0) or 0.0))
         if embb.size == 0 and urllc.size == 0:
             bundle[str(float(load))] = {
                 'load': float(load),
@@ -1021,6 +1090,10 @@ def _build_uav_ue_distribution_bundle(rl_rep: Dict[float, Dict], loads: List[flo
                 'embb_total_associated_ue': 0.0,
                 'urllc_total_associated_ue': 0.0,
                 'total_associated_ue': 0.0,
+                'user_positions': [],
+                'uav_positions': [],
+                'embb_user_count': 0,
+                'urllc_user_count': 0,
             }
             continue
         n = int(max(embb.size, urllc.size))
@@ -1038,6 +1111,10 @@ def _build_uav_ue_distribution_bundle(rl_rep: Dict[float, Dict], loads: List[flo
             'embb_total_associated_ue': float(np.sum(embb)),
             'urllc_total_associated_ue': float(np.sum(urllc)),
             'total_associated_ue': float(np.sum(total)),
+            'user_positions': user_positions.tolist() if user_positions.size > 0 else [],
+            'uav_positions': uav_positions.tolist() if uav_positions.size > 0 else [],
+            'embb_user_count': int(max(embb_user_count, 0)),
+            'urllc_user_count': int(max(urllc_user_count, 0)),
         }
     return bundle
 
@@ -1055,16 +1132,40 @@ def plot_uav_ue_distribution(rl_rep: Dict[float, Dict], loads: List[float]) -> L
             embb = np.pad(embb, (0, n - embb.size))
         if urllc.size < n:
             urllc = np.pad(urllc, (0, n - urllc.size))
-        x = np.arange(n)
-        fig, ax = plt.subplots(figsize=(10, 4.2))
-        ax.bar(x, embb, label='eMBB UE', color='#1f77b4')
-        ax.bar(x, urllc, bottom=embb, label='URLLC UE', color='#ff7f0e')
-        ax.set_title(f'UAV-UE Distribution (load={float(load):.1f})')
-        ax.set_xlabel('UAV index')
-        ax.set_ylabel('Associated UE count')
-        ax.set_xticks(x)
-        ax.legend(loc='upper right')
-        ax.grid(True, axis='y', alpha=0.25)
+        user_positions = np.asarray(rep.get('user_positions', []), dtype=float)
+        uav_positions = np.asarray(rep.get('uav_positions', []), dtype=float)
+        embb_user_count = int(float(rep.get('embb_user_count', 0.0) or 0.0))
+        urllc_user_count = int(float(rep.get('urllc_user_count', 0.0) or 0.0))
+        fig, ax = plt.subplots(figsize=(7.0, 6.0))
+        if (
+            user_positions.ndim == 2 and user_positions.shape[1] >= 2
+            and uav_positions.ndim == 2 and uav_positions.shape[1] >= 2
+            and user_positions.shape[0] > 0 and uav_positions.shape[0] > 0
+        ):
+            embb_n = int(np.clip(embb_user_count, 0, user_positions.shape[0]))
+            urllc_n = int(np.clip(urllc_user_count, 0, max(user_positions.shape[0] - embb_n, 0)))
+            embb_pts = user_positions[:embb_n, :2]
+            urllc_pts = user_positions[embb_n:embb_n + urllc_n, :2]
+            if embb_pts.size > 0:
+                ax.scatter(embb_pts[:, 0], embb_pts[:, 1], s=12, c='#4c78a8', alpha=0.85, label='eMBB UE', marker='o', edgecolors='none')
+            if urllc_pts.size > 0:
+                ax.scatter(urllc_pts[:, 0], urllc_pts[:, 1], s=12, c='#e45756', alpha=0.85, label='URLLC UE', marker='o', edgecolors='none')
+            ax.scatter(uav_positions[:, 0], uav_positions[:, 1], s=70, c='black', marker='^', label='UAV', zorder=3)
+            ax.set_title('UAV and UE Distribution')
+            ax.set_xlabel('X (m)')
+            ax.set_ylabel('Y (m)')
+            ax.grid(True, alpha=0.25)
+            ax.legend(loc='upper right')
+        else:
+            x = np.arange(n)
+            ax.bar(x, embb, label='eMBB UE', color='#1f77b4')
+            ax.bar(x, urllc, bottom=embb, label='URLLC UE', color='#ff7f0e')
+            ax.set_title(f'UAV-UE Distribution (load={float(load):.1f})')
+            ax.set_xlabel('UAV index')
+            ax.set_ylabel('Associated UE count')
+            ax.set_xticks(x)
+            ax.legend(loc='upper right')
+            ax.grid(True, axis='y', alpha=0.25)
         fig.tight_layout()
         out_path = RESULTS_DIR / f"uav_ue_distribution_load_{float(load):.1f}.png"
         fig.savefig(out_path, dpi=180)
@@ -1578,21 +1679,23 @@ def run_env_episode(
         raise ValueError("run_env_episode received env=None. Check greedy/mappo env initialization in report timeslot/dense paths.")
     episode_start = perf_counter()
     normalized_greedy_policy = str(greedy_policy or "reference").strip().lower()
-    cache_key = _report_episode_cache_key(
-        env,
-        cfg,
-        seed=seed,
-        collect_trace=collect_trace,
-        use_greedy=use_greedy,
-        greedy_policy=normalized_greedy_policy,
-        cache_tag=cache_tag,
-    )
-    cached = _REPORT_EPISODE_CACHE.get(cache_key)
-    if cached is not None:
-        _report_timing_log(
-            f"run_env_episode cache_hit mode={'greedy:' + normalized_greedy_policy if use_greedy else 'policy'} seed={seed}"
+    cache_key = None
+    if _REPORT_EPISODE_CACHE_ENABLED:
+        cache_key = _report_episode_cache_key(
+            env,
+            cfg,
+            seed=seed,
+            collect_trace=collect_trace,
+            use_greedy=use_greedy,
+            greedy_policy=normalized_greedy_policy,
+            cache_tag=cache_tag,
         )
-        return deepcopy(cached)
+        cached = _REPORT_EPISODE_CACHE.get(cache_key)
+        if cached is not None:
+            _report_timing_log(
+                f"run_env_episode cache_hit mode={'greedy:' + normalized_greedy_policy if use_greedy else 'policy'} seed={seed}"
+            )
+            return deepcopy(cached)
 
     previous_greedy_obs = bool(getattr(env.rl_cfg.env, "include_greedy_reference_in_obs", False))
     previous_fallback = bool(getattr(env.rl_cfg.shield, "enable_greedy_fallback", False))
@@ -1665,6 +1768,9 @@ def run_env_episode(
     phase_a_embb_power_anchor_binding_denom = 0
     trace = []
     done = False
+    action_select_sec_total = 0.0
+    action_resolve_sec_total = 0.0
+    env_step_sec_total = 0.0
 
     while not done:
         current_obs = observations
@@ -1689,6 +1795,7 @@ def run_env_episode(
                 if idx < len(anchor_weight) and float(anchor_weight[idx]) > 1e-9:
                     phase_a_embb_power_anchor_binding_count += 1
         greedy_debug = {}
+        _action_select_t0 = perf_counter()
         if use_greedy:
             if normalized_greedy_policy == "channel_only":
                 joint_actions = _channel_only_actions(env, current_obs)
@@ -1706,6 +1813,7 @@ def run_env_episode(
                 joint_actions = _greedy_actions(env, current_obs)
         else:
             joint_actions, actor_hidden, critic_hidden = _policy_actions(env, model, current_obs, actor_hidden, critic_hidden)
+        action_select_sec_total += float(perf_counter() - _action_select_t0)
         if greedy_debug and not planning_phase:
             for agent_id in env.agent_ids:
                 debug = greedy_debug.get(agent_id)
@@ -1736,6 +1844,7 @@ def run_env_episode(
                     greedy_requires_feasible_only,
                     float(debug.get("current_env_requires_feasible_admission_only", 0.0)),
                 )
+        _action_resolve_t0 = perf_counter()
         if planning_phase:
             resolved = {
                 agent_id: env._raw_action_to_shielded_action(joint_actions[agent_id], current_obs[agent_id])
@@ -1748,6 +1857,7 @@ def run_env_episode(
                 minislot=minislot,
                 rb=rb,
             )
+        action_resolve_sec_total += float(perf_counter() - _action_resolve_t0)
 
         for agent_id in env.agent_ids:
             obs = current_obs[agent_id]
@@ -1815,7 +1925,9 @@ def run_env_episode(
             if final.joint_reliability_rewritten:
                 joint_rewrite_count += 1
 
+        _env_step_t0 = perf_counter()
         observations, rewards, dones, infos = env.step(joint_actions)
+        env_step_sec_total += float(perf_counter() - _env_step_t0)
         done = all(dones.values())
         if collect_trace and not planning_phase:
             summary = env.summarize_episode()
@@ -1844,6 +1956,9 @@ def run_env_episode(
             })
 
     summary = env.summarize_episode()
+    topo = env.last_topology if isinstance(getattr(env, "last_topology", None), dict) else {}
+    user_positions = np.asarray(topo.get("user_positions", []), dtype=float)
+    uav_positions = np.asarray(topo.get("uav_positions", []), dtype=float)
     embb_final, embb_rates, per_uav_embb_throughput, per_uav_scheduled_embb, cell_edge = _compute_rl_embb_details(env)
     associated_embb = np.asarray(env.associated_embb_counts, dtype=float)
     associated_urllc = np.asarray(env.associated_urllc_counts, dtype=float)
@@ -1884,6 +1999,13 @@ def run_env_episode(
         'apply_joint_reliability_rewrite': float(summary.get('apply_joint_reliability_rewrite', float(bool(env.rl_cfg.shield.apply_joint_reliability_rewrite)))),
         'enable_greedy_fallback': float(summary.get('enable_greedy_fallback', float(bool(env.rl_cfg.shield.enable_greedy_fallback)))),
         'embb_rate': float(summary['embb_total_rate']),
+        # Same-scenario eMBB baseline before URLLC puncture/admission impact.
+        'embb_rate_pre_urllc_admission': float(
+            summary.get(
+                'embb_rate_raw_before_local_puncture_deduction',
+                summary.get('embb_rate_with_intercell', summary.get('embb_total_rate', 0.0)),
+            )
+        ),
         'embb_user_rate': float(summary['embb_user_rate_mean']),
         'embb_service_ratio': float(summary['embb_service_ratio']),
         'embb_positive_rate_ratio': embb_positive_rate_ratio,
@@ -1991,6 +2113,8 @@ def run_env_episode(
         'per_uav_throughput_std': float(np.std(per_uav_embb_throughput)),
         'per_uav_associated_embb': associated_embb,
         'per_uav_associated_urllc': associated_urllc,
+        'user_positions': user_positions[:, :2] if user_positions.ndim == 2 and user_positions.shape[1] >= 2 else np.zeros((0, 2), dtype=float),
+        'uav_positions': uav_positions[:, :2] if uav_positions.ndim == 2 and uav_positions.shape[1] >= 2 else np.zeros((0, 2), dtype=float),
         'per_uav_scheduled_embb': per_uav_scheduled_embb,
         'per_uav_scheduled_urllc': scheduled_urllc,
         'per_uav_overlay_count': overlay_counts,
@@ -2076,6 +2200,18 @@ def run_env_episode(
         'phase0_owner_effective_rate_gain_vs_snapshot_cells_mean_mbps': float(summary.get('phase0_owner_effective_rate_gain_vs_snapshot_cells_mean_mbps', 0.0)),
         'phase0_owner_effective_change_count': float(summary.get('phase0_owner_effective_change_count', 0.0)),
         'phase_a_total_decisions': float(summary.get('phase_a_total_decisions', 0.0)),
+        'phase_a_rejected_intercell_per_decision': float(summary.get('phase_a_rejected_intercell_per_decision', 0.0)),
+        'phase_a_rejected_min_rate_per_decision': float(summary.get('phase_a_rejected_min_rate_per_decision', 0.0)),
+        'phase_a_rejected_power_guard_per_decision': float(summary.get('phase_a_rejected_power_guard_per_decision', 0.0)),
+        'phase_a_rejected_collision_per_decision': float(summary.get('phase_a_rejected_collision_per_decision', 0.0)),
+        'phase_a_rejected_deadline_per_decision': float(summary.get('phase_a_rejected_deadline_per_decision', 0.0)),
+        'phase_a_rejected_other_per_decision': float(summary.get('phase_a_rejected_other_per_decision', 0.0)),
+        'phase_a_rejected_other_gain_ratio_per_decision': float(summary.get('phase_a_rejected_other_gain_ratio_per_decision', 0.0)),
+        'phase_a_rejected_other_overlay_margin_per_decision': float(summary.get('phase_a_rejected_other_overlay_margin_per_decision', 0.0)),
+        'phase_a_rejected_other_overlay_positive_gate_per_decision': float(summary.get('phase_a_rejected_other_overlay_positive_gate_per_decision', 0.0)),
+        'phase_a_rejected_other_gain_ratio_given_other_ratio': float(summary.get('phase_a_rejected_other_gain_ratio_given_other_ratio', 0.0)),
+        'phase_a_rejected_other_overlay_margin_given_other_ratio': float(summary.get('phase_a_rejected_other_overlay_margin_given_other_ratio', 0.0)),
+        'phase_a_rejected_other_overlay_positive_gate_given_other_ratio': float(summary.get('phase_a_rejected_other_overlay_positive_gate_given_other_ratio', 0.0)),
         'phase_a_embb_power_write_count': float(summary.get('phase_a_embb_power_write_count', 0.0)),
         'phase_a_embb_power_changed_count': float(summary.get('phase_a_embb_power_changed_count', 0.0)),
         'phase_a_embb_power_write_ratio': float(summary.get('phase_a_embb_power_write_ratio', 0.0)),
@@ -2142,6 +2278,9 @@ def run_env_episode(
             if getattr(env, "phase0_snapshot_owner_per_uav_rb", None) is not None else None
         ),
         'episode_sec': float(perf_counter() - episode_start),
+        'profile_action_select_sec': float(action_select_sec_total),
+        'profile_action_resolve_sec': float(action_resolve_sec_total),
+        'profile_env_step_sec': float(env_step_sec_total),
     }
     result.update({
         'phase_a_embb_power_pre_clip_mean_delta': float(summary.get('phase_a_embb_power_pre_clip_mean_delta', 0.0)),
@@ -2234,11 +2373,9 @@ def run_env_episode(
             f"positive_clamped_ratio={float(result.get('phase_a_power_positive_clamped_to_zero_ratio', 0.0)):.6f} "
             f"negative_executed_ratio={float(result.get('phase_a_power_negative_executed_ratio', 0.0)):.6f}"
         )
-    _REPORT_EPISODE_CACHE[cache_key] = deepcopy(result)
-    _report_timing_log(
-        f"run_env_episode mode={'greedy:' + normalized_greedy_policy if use_greedy else 'policy'} "
-        f"seed={seed} collect_trace={collect_trace} sec={float(result['episode_sec']):.3f}"
-    )
+    if _REPORT_EPISODE_CACHE_ENABLED and cache_key is not None:
+        _REPORT_EPISODE_CACHE[cache_key] = deepcopy(result)
+    # Per-episode timing line is intentionally suppressed to keep logs concise.
     return result
 
 
@@ -3161,16 +3298,56 @@ def run_hard_feasible_throughput_greedy_sweep(
     episodes_per_load: int,
     checkpoint_path: Path,
     base_cfg: Optional[SRMAPPOConfig] = None,
+    verbose_per_episode: bool = True,
 ) -> Tuple[Dict, Dict]:
     sweep_start = perf_counter()
     base_sys, base_urllc, base_embb, base_algo, base_sim = _build_main_like_configs()
     report_cfg = deepcopy(base_cfg or _load_checkpoint_cfg(checkpoint_path))
+    # Optional report-time hard-feasible greedy gate overrides.
+    # This affects only the greedy report sweep path and keeps training/runtime env untouched.
+    gain_ratio_override = float(getattr(report_cfg.env, "greedy_hf_min_noma_gain_ratio_override", -1.0) or -1.0)
+    sic_db_override = float(getattr(report_cfg.env, "greedy_hf_embb_min_sic_snir_db_override", -100.0) or -100.0)
+    if gain_ratio_override > 0.0:
+        base_algo.min_noma_gain_ratio = float(gain_ratio_override)
+        _report_log(f"[GREEDY] override min_noma_gain_ratio={base_algo.min_noma_gain_ratio:.3f}")
+    if sic_db_override > -100.0:
+        base_algo.embb_min_sic_snir_db = float(sic_db_override)
+        _report_log(f"[GREEDY] override embb_min_sic_snir_db={base_algo.embb_min_sic_snir_db:.3f} dB")
+    forced_urllc_ratio = _resolve_forced_urllc_ratio(report_cfg)
+    exp_line = str(getattr(report_cfg.training, "experiment_line", "") or "").strip().lower()
+    if hasattr(base_sim, "urllc_user_ratio") and forced_urllc_ratio >= 0.0:
+        base_sim.urllc_user_ratio = float(np.clip(forced_urllc_ratio, 0.0, 1.0))
+        # Strict pure-eMBB guard: disable URLLC arrivals entirely.
+        if base_sim.urllc_user_ratio <= 0.0:
+            if hasattr(base_sim, "urllc_poisson_rate"):
+                base_sim.urllc_poisson_rate = 0.0
+            if hasattr(base_sim, "fixed_urllc_poisson_rate"):
+                base_sim.fixed_urllc_poisson_rate = True
+        _report_log(
+            f"[GREEDY] forcing urllc_user_ratio={base_sim.urllc_user_ratio:.3f} "
+            f"(override={float(getattr(report_cfg.env, 'urllc_user_ratio_override', -1.0)):.3f}, experiment='{exp_line}')"
+        )
     report_cfg.env.include_greedy_reference_in_obs = False
     report_cfg.training.greedy_baseline_mode = "hard_feasible_throughput_greedy"
     report_cfg.training.selection_baseline_mode = "hard_feasible_throughput_greedy"
     checkpoint_cache_tag = str(Path(checkpoint_path).resolve())
+    nested_load_enabled = str(os.environ.get("SR_MAPPO_REPORT_NESTED_LOAD_SCENARIO", "1")).strip().lower() not in {"0", "false", "no", "off"}
+    max_total_users = 0
+    max_embb_users = 0
+    max_urllc_users = 0
+    if nested_load_enabled and loads:
+        _mx_sys, _mx_ur, _mx_em, _mx_algo, _mx_sim = _configure_density_scenario(
+            max(float(x) for x in loads), base_sys, base_urllc, base_embb, base_algo, base_sim
+        )
+        max_embb_users = int(_mx_sys.num_embb_users)
+        max_urllc_users = int(_mx_sys.num_urllc_users)
+        max_total_users = int(max_embb_users + max_urllc_users)
+        _report_log(
+            f"[GREEDY] nested-load enabled: max_users(total/embb/urllc)="
+            f"{max_total_users}/{max_embb_users}/{max_urllc_users}"
+        )
     scalar_keys = [
-        'embb_rate', 'embb_user_rate', 'embb_service_ratio', 'embb_positive_rate_ratio', 'embb_min_rate_satisfaction_ratio', 'urllc_admission',
+        'embb_rate', 'embb_rate_pre_urllc_admission', 'embb_user_rate', 'embb_service_ratio', 'embb_positive_rate_ratio', 'embb_min_rate_satisfaction_ratio', 'urllc_admission',
         'admitted_urllc_reliability', 'urllc_reliability', 'effective_urllc_success_over_arrivals', 'empty_admission_case',
         'active_packets', 'scheduled_packets', 'total_power', 'embb_power', 'urllc_power',
         'overlay_ratio', 'puncture_ratio', 'overlay_selection_ratio', 'puncture_selection_ratio', 'embb_only_fraction', 'avg_puncture_loss',
@@ -3186,6 +3363,43 @@ def run_hard_feasible_throughput_greedy_sweep(
         'greedy_keep_only_when_no_feasible_admit_ratio', 'greedy_selected_urllc_reliability', 'greedy_selected_embb_min_rate_ok',
         'greedy_avg_rejected_urllc_when_noop_better', 'greedy_noop_available_ratio',
         'greedy_noop_better_ratio', 'greedy_requires_feasible_admission_only',
+        'greedy_urllc_budget_used_ratio', 'greedy_urllc_budget_utilization_ratio',
+        'greedy_embb_loss_share_cap_ratio',
+        'greedy_hf_reject_reliability_ratio', 'greedy_hf_reject_power_ratio',
+        'greedy_hf_reject_min_rate_ratio', 'greedy_hf_reject_share_cap_ratio',
+        'greedy_hf_feasible_ratio',
+        'greedy_hf_reject_reliability_per_decision', 'greedy_hf_reject_power_per_decision',
+        'greedy_hf_reject_min_rate_per_decision', 'greedy_hf_reject_share_cap_per_decision',
+        'greedy_hf_candidate_evaluated_per_decision', 'greedy_hf_candidate_feasible_per_decision',
+        'greedy_hf_rescan_used', 'greedy_hf_prefilter_truncated',
+        'greedy_hf_no_candidate_ratio', 'greedy_hf_all_rejected_ratio', 'greedy_hf_budget_exhausted_keep_ratio',
+        'greedy_hf_no_candidate_per_decision', 'greedy_hf_all_rejected_per_decision', 'greedy_hf_budget_exhausted_keep_per_decision',
+        'greedy_hf_prefilter_pair_per_decision', 'greedy_hf_prefilter_block_mode_mask_per_decision',
+        'greedy_hf_prefilter_block_packet_mask_per_decision', 'greedy_hf_prefilter_block_mode_infeasible_per_decision',
+        'greedy_hf_prefilter_block_mode_mask_ratio', 'greedy_hf_prefilter_block_packet_mask_ratio',
+        'greedy_hf_prefilter_block_mode_infeasible_ratio',
+        'greedy_hf_no_candidate_block_mode_mask_per_no_candidate',
+        'greedy_hf_no_candidate_block_packet_mask_per_no_candidate',
+        'greedy_hf_no_candidate_block_mode_infeasible_per_no_candidate',
+        'greedy_hf_no_candidate_empty_observation_per_decision',
+        'greedy_hf_no_candidate_mask_block_per_decision',
+        'greedy_hf_no_candidate_empty_observation_given_no_candidate_ratio',
+        'greedy_hf_no_candidate_mask_block_given_no_candidate_ratio',
+        'greedy_hf_no_candidate_given_no_feasible_ratio', 'greedy_hf_all_rejected_given_no_feasible_ratio',
+        'greedy_hf_budget_exhausted_given_no_feasible_ratio',
+        'phase_a_rejected_intercell_per_decision', 'phase_a_rejected_min_rate_per_decision',
+        'phase_a_rejected_power_guard_per_decision', 'phase_a_rejected_collision_per_decision',
+        'phase_a_rejected_deadline_per_decision', 'phase_a_rejected_other_per_decision',
+        'phase_a_rejected_other_gain_ratio_per_decision', 'phase_a_rejected_other_overlay_margin_per_decision',
+        'phase_a_rejected_other_overlay_positive_gate_per_decision',
+        'phase_a_rejected_other_no_overlay_owner_per_decision',
+        'phase_a_rejected_other_overlay_reliability_per_decision',
+        'phase_a_rejected_other_overlay_sic_per_decision',
+        'phase_a_rejected_other_gain_ratio_given_other_ratio', 'phase_a_rejected_other_overlay_margin_given_other_ratio',
+        'phase_a_rejected_other_overlay_positive_gate_given_other_ratio',
+        'phase_a_rejected_other_no_overlay_owner_given_other_ratio',
+        'phase_a_rejected_other_overlay_reliability_given_other_ratio',
+        'phase_a_rejected_other_overlay_sic_given_other_ratio',
         'urllc_slot_duration_s', 'urllc_packet_bits_mean',
         'urllc_throughput_bps_slot_est', 'urllc_throughput_mbps_slot_est',
         'mean_intercell_interference_power', 'mean_intercell_interference_mw', 'mean_intercell_interference_dbm', 'intercell_interference_nonzero_ratio',
@@ -3205,11 +3419,20 @@ def run_hard_feasible_throughput_greedy_sweep(
     ]
     metrics = {'loads': [], 'lambda': []}
     metrics.update({key: [] for key in scalar_keys + vector_keys})
+    # Keep per-episode samples for downstream analysis (e.g., share-cap CDF).
+    metrics['greedy_episode_arrivals_samples'] = []
+    metrics['greedy_episode_admitted_samples'] = []
+    metrics['greedy_episode_budget_used_ratio_samples'] = []
     representative = {}
     for load_idx, load in enumerate(loads):
         sys_cfg, urllc_cfg, embb_cfg, algo_cfg, sim_cfg = _configure_density_scenario(
             load, base_sys, base_urllc, base_embb, base_algo, base_sim
         )
+        if nested_load_enabled and max_total_users > 0:
+            setattr(sys_cfg, "nested_load_from_max_users_enabled", True)
+            setattr(sys_cfg, "nested_load_max_total_users", int(max_total_users))
+            setattr(sys_cfg, "nested_load_max_embb_users", int(max_embb_users))
+            setattr(sys_cfg, "nested_load_max_urllc_users", int(max_urllc_users))
         if hasattr(base_sim, 'urllc_user_ratio'):
             sim_cfg.urllc_user_ratio = base_sim.urllc_user_ratio
         env = SRMAPPOPhaseAEnv(sys_cfg, urllc_cfg, embb_cfg, algo_cfg, sim_cfg, report_cfg)
@@ -3227,10 +3450,147 @@ def run_hard_feasible_throughput_greedy_sweep(
                 cache_tag=checkpoint_cache_tag,
             ),
         )
+        # Per-episode greedy debug log (requested): arrivals/admission/throughput visibility.
+        running_arrivals: List[float] = []
+        running_admitted: List[float] = []
+        running_admission_ratio: List[float] = []
+        running_embb_rate_mbps: List[float] = []
+        running_urllc_tp_mbps: List[float] = []
+        running_urllc_users: List[float] = []
+        running_embb_users: List[float] = []
+        running_budget_used_ratio: List[float] = []
+        running_episode_sec: List[float] = []
+        running_reset_total_sec: List[float] = []
+        running_prepare_slot_ctx_sec: List[float] = []
+        running_arrival_gen_sec: List[float] = []
+        running_action_select_sec: List[float] = []
+        running_action_resolve_sec: List[float] = []
+        running_env_step_sec: List[float] = []
+        running_hf_eval_sec: List[float] = []
+        running_hf_prefilter_sec: List[float] = []
+        running_hf_fastpath_sec: List[float] = []
+        running_hf_rescan_used: List[float] = []
+        running_other_sec: List[float] = []
+        for ep_idx, episode in enumerate(episodes, start=1):
+            arrivals = float(episode.get('active_packets', 0.0) or 0.0)
+            admitted = float(episode.get('scheduled_packets', 0.0) or 0.0)
+            admission_ratio = float(episode.get('urllc_admission', 0.0) or 0.0)
+            embb_rate_mbps = float((episode.get('embb_rate', 0.0) or 0.0) / 1.0e6)
+            urllc_tp_mbps = float(episode.get('urllc_throughput_mbps_slot_est', 0.0) or 0.0)
+            urllc_users = int(episode.get('urllc_user_count', 0) or 0)
+            embb_users = int(episode.get('embb_user_count', 0) or 0)
+            budget_used_ratio = float(
+                episode.get(
+                    "greedy_urllc_budget_utilization_ratio",
+                    episode.get("greedy_urllc_budget_used_ratio", 0.0),
+                )
+                or 0.0
+            )
+            episode_sec = float(episode.get("episode_sec", 0.0) or 0.0)
+            reset_total_sec = float(episode.get("profile_reset_total_sec", 0.0) or 0.0)
+            prepare_slot_ctx_sec = float(episode.get("profile_prepare_slot_context_sec", 0.0) or 0.0)
+            arrival_gen_sec = float(episode.get("profile_arrival_generation_sec", 0.0) or 0.0)
+            action_select_sec = float(episode.get("profile_action_select_sec", 0.0) or 0.0)
+            action_resolve_sec = float(episode.get("profile_action_resolve_sec", 0.0) or 0.0)
+            env_step_sec = float(episode.get("profile_env_step_sec", 0.0) or 0.0)
+            hf_eval_sec = float(episode.get("profile_hf_eval_sec", 0.0) or 0.0)
+            hf_prefilter_sec = float(episode.get("profile_hf_prefilter_sec", 0.0) or 0.0)
+            hf_fastpath_sec = float(episode.get("profile_hf_fastpath_sec", 0.0) or 0.0)
+            hf_rescan_used = float(episode.get("greedy_hf_rescan_used", 0.0) or 0.0)
+            accounted_major_sec = reset_total_sec + action_select_sec + action_resolve_sec + env_step_sec
+            other_sec = max(episode_sec - accounted_major_sec, 0.0)
+            running_arrivals.append(arrivals)
+            running_admitted.append(admitted)
+            running_admission_ratio.append(admission_ratio)
+            running_embb_rate_mbps.append(embb_rate_mbps)
+            running_urllc_tp_mbps.append(urllc_tp_mbps)
+            running_urllc_users.append(float(urllc_users))
+            running_embb_users.append(float(embb_users))
+            running_budget_used_ratio.append(budget_used_ratio)
+            running_episode_sec.append(episode_sec)
+            running_reset_total_sec.append(reset_total_sec)
+            running_prepare_slot_ctx_sec.append(prepare_slot_ctx_sec)
+            running_arrival_gen_sec.append(arrival_gen_sec)
+            running_action_select_sec.append(action_select_sec)
+            running_action_resolve_sec.append(action_resolve_sec)
+            running_env_step_sec.append(env_step_sec)
+            running_hf_eval_sec.append(hf_eval_sec)
+            running_hf_prefilter_sec.append(hf_prefilter_sec)
+            running_hf_fastpath_sec.append(hf_fastpath_sec)
+            running_hf_rescan_used.append(hf_rescan_used)
+            running_other_sec.append(other_sec)
+            if verbose_per_episode:
+                _report_log(
+                    f"[GREEDY][load={float(load):.1f}] episode {ep_idx}/{int(episodes_per_load)} "
+                    f"| users(urllc/embb)={urllc_users}/{embb_users} "
+                    f"| arrivals={arrivals:.2f} | admitted={admitted:.2f} | admission={admission_ratio:.4f} "
+                    f"| embb_rate={embb_rate_mbps:.3f} Mbps | urllc_tp={urllc_tp_mbps:.3f} Mbps"
+                )
+            if ep_idx % 10 == 0:
+                mean_urllc_users = float(np.mean(running_urllc_users)) if running_urllc_users else 0.0
+                mean_embb_users = float(np.mean(running_embb_users)) if running_embb_users else 0.0
+                embb_to_urllc_ratio = float(mean_embb_users / max(mean_urllc_users, 1.0e-9))
+                total_episode_sec = max(float(np.sum(running_episode_sec)), 1.0e-12)
+                total_action_select_sec = float(np.sum(running_action_select_sec))
+                total_hf_prefilter_sec = float(np.sum(running_hf_prefilter_sec))
+                total_hf_eval_sec = float(np.sum(running_hf_eval_sec))
+                total_hf_fastpath_sec = float(np.sum(running_hf_fastpath_sec))
+                total_action_other_sec = max(
+                    total_action_select_sec - total_hf_prefilter_sec - total_hf_eval_sec - total_hf_fastpath_sec,
+                    0.0,
+                )
+                _report_log(
+                    f"[GREEDY][load={float(load):.1f}] time_breakdown(1-{ep_idx}) "
+                    f"| reset_total={float(np.sum(running_reset_total_sec)) / total_episode_sec:.3%} "
+                    f"| action_select={total_action_select_sec / total_episode_sec:.3%} "
+                    f"| action_resolve={float(np.sum(running_action_resolve_sec)) / total_episode_sec:.3%} "
+                    f"| env_step={float(np.sum(running_env_step_sec)) / total_episode_sec:.3%} "
+                    f"| residual_other={float(np.sum(running_other_sec)) / total_episode_sec:.3%}"
+                )
+                _report_log(
+                    f"[GREEDY][load={float(load):.1f}] time_breakdown_detail(1-{ep_idx}) "
+                    f"| reset(slot_ctx/arrival/other)="
+                    f"{float(np.sum(running_prepare_slot_ctx_sec)) / total_episode_sec:.3%}/"
+                    f"{float(np.sum(running_arrival_gen_sec)) / total_episode_sec:.3%}/"
+                    f"{max(float(np.sum(running_reset_total_sec)) - float(np.sum(running_prepare_slot_ctx_sec)) - float(np.sum(running_arrival_gen_sec)), 0.0) / total_episode_sec:.3%} "
+                    f"| action(hf_prefilter/hf_eval/hf_fastpath/other)="
+                    f"{total_hf_prefilter_sec / total_episode_sec:.3%}/"
+                    f"{total_hf_eval_sec / total_episode_sec:.3%}/"
+                    f"{total_hf_fastpath_sec / total_episode_sec:.3%}/"
+                    f"{total_action_other_sec / total_episode_sec:.3%}"
+                )
+                _report_log(
+                    f"[GREEDY][load={float(load):.1f}] episodes 1-{ep_idx} summary "
+                    f"| users_mean(urllc/embb)={mean_urllc_users:.2f}/{mean_embb_users:.2f} "
+                    f"| embb:urllc={embb_to_urllc_ratio:.3f} "
+                    f"| arrivals_mean={float(np.mean(running_arrivals)):.2f} "
+                    f"| admitted_mean={float(np.mean(running_admitted)):.2f} "
+                    f"| admission_mean={float(np.mean(running_admission_ratio)):.4f} "
+                    f"| embb_rate_mean={float(np.mean(running_embb_rate_mbps)):.3f} Mbps "
+                    f"| urllc_tp_mean={float(np.mean(running_urllc_tp_mbps)):.3f} Mbps "
+                    f"| budget_used_ratio_mean={float(np.mean(running_budget_used_ratio)):.4f} "
+                    f"| budget_used_ratio_max={float(np.max(running_budget_used_ratio)):.4f} "
+                    f"| hf_rescan_ratio={float(np.mean(running_hf_rescan_used)):.4f}"
+                )
+        # Persist per-episode samples for post-hoc plotting/comparison.
+        metrics['greedy_episode_arrivals_samples'].append([float(x) for x in running_arrivals])
+        metrics['greedy_episode_admitted_samples'].append([float(x) for x in running_admitted])
+        metrics['greedy_episode_budget_used_ratio_samples'].append([float(x) for x in running_budget_used_ratio])
         metrics['loads'].append(float(load))
         metrics['lambda'].append(_load_to_lambda(load))
         for key in scalar_keys:
-            metrics[key].append(_safe_mean([episode.get(key, 0.0) for episode in episodes]))
+            if key == 'greedy_urllc_budget_used_ratio':
+                metrics[key].append(
+                    _safe_mean([
+                        episode.get(
+                            "greedy_urllc_budget_utilization_ratio",
+                            episode.get("greedy_urllc_budget_used_ratio", 0.0),
+                        )
+                        for episode in episodes
+                    ])
+                )
+            else:
+                metrics[key].append(_safe_mean([episode.get(key, 0.0) for episode in episodes]))
         for key in vector_keys:
             metrics[key].append(np.mean(np.stack([episode[key] for episode in episodes]), axis=0))
     _report_timing_log(
@@ -3675,7 +4035,7 @@ def run_timeslot_series(
     cfg, model = _build_model_for_env(env, checkpoint_path)
 
     rl_series = []
-    seed_base = 8000 + int(load * 10)
+    seed_base = 8000
     checkpoint_cache_tag = str(Path(checkpoint_path).resolve())
     for slot_idx in range(num_slots):
         seed = seed_base + slot_idx
@@ -3711,7 +4071,7 @@ def run_greedy_timeslot_series(
 
     report_cfg = deepcopy(cfg or _load_checkpoint_cfg(checkpoint_path))
     greedy_series = []
-    seed_base = 8000 + int(load * 10)
+    seed_base = 8000
     greedy_mode = _greedy_baseline_mode(report_cfg)
     greedy_env = None
     if greedy_mode == "matched_fixed_embb":
@@ -3927,6 +4287,7 @@ def plot_core_kpi_debug_fast(
     *,
     baseline_label: str = "Greedy",
     legend_title: str = "",
+    greedy_only: bool = False,
 ) -> Path:
     """Fast core KPI plot (MAPPO vs selected baseline)."""
     loads = np.asarray(rl.get('loads', []), dtype=float)
@@ -3958,7 +4319,8 @@ def plot_core_kpi_debug_fast(
     def _plot2(ax, key: str, title: str, ylabel: str, *, scale_div: float = 1.0, scale_mul: float = 1.0):
         y_rl = _series(rl, key) / scale_div * scale_mul
         y_base = _series(baseline, key) / scale_div * scale_mul
-        ax.plot(loads, y_rl, color='tab:orange', marker='s', markersize=6, linewidth=2.0, label='MAPPO (solid)')
+        if not greedy_only:
+            ax.plot(loads, y_rl, color='tab:orange', marker='s', markersize=6, linewidth=2.0, label='MAPPO (solid)')
         ax.plot(loads, y_base, color='tab:brown', marker='o', markersize=6, linewidth=2.0, linestyle='--', label=f'{baseline_label} (dashed)')
         _style(ax, title, 'Average UE load per UAV', ylabel)
         ax.legend(loc="best", fontsize=8, frameon=False)
@@ -3968,7 +4330,8 @@ def plot_core_kpi_debug_fast(
     ax = axes[0, 1]
     m_adm = _series(rl, 'urllc_admission')
     g_adm = _series(baseline, 'urllc_admission')
-    ax.plot(loads, m_adm, color='tab:orange', marker='s', markersize=6, linewidth=2.0, label='MAPPO admission (solid)')
+    if not greedy_only:
+        ax.plot(loads, m_adm, color='tab:orange', marker='s', markersize=6, linewidth=2.0, label='MAPPO admission (solid)')
     ax.plot(loads, g_adm, color='tab:brown', marker='o', markersize=6, linewidth=2.0, linestyle='--', label=f'{baseline_label} admission (dashed)')
     _style(ax, 'URLLC admission ratio', 'Average UE load per UAV', 'Ratio')
     ax.legend(loc="best", fontsize=8, frameon=False)
@@ -4003,9 +4366,11 @@ def plot_core_kpi_debug_fast(
         ('embb_min_rate_satisfaction_ratio',),
         context='core_kpi_debug.greedy.minrate_corrected',
     )
-    ax.plot(loads, m_srv, color='tab:orange', marker='s', markersize=6, linewidth=2.0, label='MAPPO service ratio (solid)')
+    if not greedy_only:
+        ax.plot(loads, m_srv, color='tab:orange', marker='s', markersize=6, linewidth=2.0, label='MAPPO service ratio (solid)')
     ax.plot(loads, g_srv, color='tab:brown', marker='o', markersize=6, linewidth=2.0, linestyle='--', label=f'{baseline_label} service ratio (dashed)')
-    ax.plot(loads, m_min, color='tab:green', marker='^', markersize=6, linewidth=2.0, alpha=0.90, zorder=3, label='MAPPO min-rate satisfaction (solid)')
+    if not greedy_only:
+        ax.plot(loads, m_min, color='tab:green', marker='^', markersize=6, linewidth=2.0, alpha=0.90, zorder=3, label='MAPPO min-rate satisfaction (solid)')
     ax.plot(loads, g_min, color='tab:gray', marker='d', markersize=6, linewidth=2.0, linestyle='--', alpha=0.85, zorder=2, label=f'{baseline_label} min-rate satisfaction (dashed)')
     _style(ax, 'eMBB service & min-rate satisfaction (corrected)', 'Average UE load per UAV', 'Ratio')
     ax.legend(loc="best", fontsize=8, frameon=False)
@@ -4038,8 +4403,9 @@ def plot_core_kpi_debug_fast(
 
     # Mode ratio (overlay/superpose + puncture).
     ax = axes[1, 1]
-    ax.plot(loads, _series(rl, 'overlay_ratio'), color='tab:orange', marker='s', markersize=6, linewidth=2.0, label='MAPPO superpose/overlay (solid)')
-    ax.plot(loads, _series(rl, 'puncture_ratio'), color='tab:red', marker='x', markersize=6, linewidth=2.0, label='MAPPO puncture (solid)')
+    if not greedy_only:
+        ax.plot(loads, _series(rl, 'overlay_ratio'), color='tab:orange', marker='s', markersize=6, linewidth=2.0, label='MAPPO superpose/overlay (solid)')
+        ax.plot(loads, _series(rl, 'puncture_ratio'), color='tab:red', marker='x', markersize=6, linewidth=2.0, label='MAPPO puncture (solid)')
     ax.plot(loads, _series(baseline, 'overlay_ratio'), color='tab:brown', marker='o', markersize=6, linewidth=2.0, linestyle='--', label=f'{baseline_label} superpose/overlay (dashed)')
     ax.plot(loads, _series(baseline, 'puncture_ratio'), color='tab:gray', marker='d', markersize=6, linewidth=2.0, linestyle='--', label=f'{baseline_label} puncture (dashed)')
     _style(ax, 'Mode ratio', 'Average UE load per UAV', 'Ratio')
@@ -4049,16 +4415,18 @@ def plot_core_kpi_debug_fast(
     ax = axes[1, 2]
     m_tp = _urllc_tp_bps_slot_est(rl)
     g_tp = _urllc_tp_bps_slot_est(baseline)
-    ax.plot(loads, m_tp / 1.0e6, color='tab:orange', marker='s', markersize=6, linewidth=2.0, label='MAPPO URLLC throughput (solid)')
+    if not greedy_only:
+        ax.plot(loads, m_tp / 1.0e6, color='tab:orange', marker='s', markersize=6, linewidth=2.0, label='MAPPO URLLC throughput (solid)')
     ax.plot(loads, g_tp / 1.0e6, color='tab:brown', marker='o', markersize=6, linewidth=2.0, linestyle='--', label=f'{baseline_label} URLLC throughput (dashed)')
     _style(ax, 'URLLC throughput (slot est.)', 'Average UE load per UAV', 'Mbps')
     ax.legend(loc="best", fontsize=8, frameon=False)
 
     # Power split (eMBB / URLLC / total).
     ax = axes[1, 3]
-    ax.plot(loads, _series(rl, 'embb_power') * 1e3, color='tab:orange', marker='s', markersize=6, linewidth=2.0, label='MAPPO eMBB power (solid)')
-    ax.plot(loads, _series(rl, 'urllc_power') * 1e3, color='tab:green', marker='^', markersize=6, linewidth=2.0, label='MAPPO URLLC power (solid)')
-    ax.plot(loads, _series(rl, 'total_power') * 1e3, color='tab:blue', marker='P', markersize=6, linewidth=2.0, label='MAPPO total power (solid)')
+    if not greedy_only:
+        ax.plot(loads, _series(rl, 'embb_power') * 1e3, color='tab:orange', marker='s', markersize=6, linewidth=2.0, label='MAPPO eMBB power (solid)')
+        ax.plot(loads, _series(rl, 'urllc_power') * 1e3, color='tab:green', marker='^', markersize=6, linewidth=2.0, label='MAPPO URLLC power (solid)')
+        ax.plot(loads, _series(rl, 'total_power') * 1e3, color='tab:blue', marker='P', markersize=6, linewidth=2.0, label='MAPPO total power (solid)')
     ax.plot(loads, _series(baseline, 'embb_power') * 1e3, color='tab:brown', marker='o', markersize=6, linewidth=2.0, linestyle='--', label=f'{baseline_label} eMBB power (dashed)')
     ax.plot(loads, _series(baseline, 'urllc_power') * 1e3, color='tab:olive', marker='d', markersize=6, linewidth=2.0, linestyle='--', label=f'{baseline_label} URLLC power (dashed)')
     ax.plot(loads, _series(baseline, 'total_power') * 1e3, color='tab:gray', marker='x', markersize=6, linewidth=2.0, linestyle='--', label=f'{baseline_label} total power (dashed)')
@@ -4068,6 +4436,116 @@ def plot_core_kpi_debug_fast(
     if legend_title:
         fig.suptitle(str(legend_title), fontsize=10)
     path = RESULTS_DIR / 'core_kpi_debug.png'
+    fig.savefig(path, dpi=220)
+    plt.close(fig)
+    return path
+
+
+def plot_urllc_arrival_admit_debug(
+    metrics: Dict,
+    *,
+    episodes_per_load: int,
+    title_suffix: str = "",
+) -> Path:
+    """Plot URLLC arrivals/admissions and their ratio per load."""
+    loads = np.asarray(metrics.get("loads", []), dtype=float)
+
+    def _series(key: str) -> np.ndarray:
+        arr = np.asarray(metrics.get(key, []), dtype=float)
+        if arr.size == loads.size:
+            return arr
+        return np.zeros_like(loads, dtype=float)
+
+    mean_arrivals = _series("active_packets")
+    mean_admits = _series("scheduled_packets")
+    total_arrivals = mean_arrivals * max(int(episodes_per_load), 1)
+    total_admits = mean_admits * max(int(episodes_per_load), 1)
+    ratio = np.divide(total_admits, np.maximum(total_arrivals, 1.0), out=np.zeros_like(total_admits), where=total_arrivals > 0.0)
+
+    fig, axes = plt.subplots(1, 3, figsize=(15.5, 4.6), constrained_layout=True)
+    ax0, ax1, ax2 = axes
+
+    ax0.plot(loads, total_arrivals, color="tab:blue", marker="o", linewidth=2.0, label="Total arrivals")
+    _style(ax0, "URLLC arrivals (total)", "Average UE load per UAV", "Packets")
+    ax0.legend(loc="best", fontsize=8, frameon=False)
+
+    ax1.plot(loads, total_admits, color="tab:green", marker="s", linewidth=2.0, label="Total admitted")
+    _style(ax1, "URLLC admitted (total)", "Average UE load per UAV", "Packets")
+    ax1.legend(loc="best", fontsize=8, frameon=False)
+
+    ax2.plot(loads, ratio, color="tab:brown", marker="d", linewidth=2.0, linestyle="--", label="Admit/Arrival ratio")
+    _style(ax2, "URLLC admit ratio", "Average UE load per UAV", "Ratio")
+    ax2.legend(loc="best", fontsize=8, frameon=False)
+
+    if title_suffix:
+        fig.suptitle(str(title_suffix), fontsize=10)
+    path = RESULTS_DIR / "urllc_arrival_admit_debug.png"
+    fig.savefig(path, dpi=220)
+    plt.close(fig)
+    return path
+
+
+def plot_greedy_candidate_rejection_debug(metrics: Dict, *, title_suffix: str = "") -> Path:
+    """Plot greedy hard-feasible candidate rejection decomposition vs load."""
+    loads = np.asarray(metrics.get("loads", []), dtype=float)
+    if loads.size == 0:
+        loads = np.asarray(DEFAULT_LOADS, dtype=float)
+    rej_rel = np.asarray(metrics.get("greedy_hf_reject_reliability_ratio", np.zeros_like(loads)), dtype=float)
+    rej_pwr = np.asarray(metrics.get("greedy_hf_reject_power_ratio", np.zeros_like(loads)), dtype=float)
+    rej_min = np.asarray(metrics.get("greedy_hf_reject_min_rate_ratio", np.zeros_like(loads)), dtype=float)
+    rej_share = np.asarray(metrics.get("greedy_hf_reject_share_cap_ratio", np.zeros_like(loads)), dtype=float)
+    feasible = np.asarray(metrics.get("greedy_hf_feasible_ratio", np.zeros_like(loads)), dtype=float)
+    eval_per_dec = np.asarray(metrics.get("greedy_hf_candidate_evaluated_per_decision", np.zeros_like(loads)), dtype=float)
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
+    ax = axes[0]
+    ax.stackplot(
+        loads,
+        rej_rel,
+        rej_pwr,
+        rej_min,
+        rej_share,
+        labels=["reject: reliability", "reject: power", "reject: min-rate", "reject: share-cap"],
+        alpha=0.85,
+    )
+    ax.plot(loads, feasible, color="black", linewidth=2.0, marker="o", label="feasible ratio")
+    ax.set_title("Greedy candidate rejection decomposition")
+    ax.set_xlabel("Average UE load per UAV")
+    ax.set_ylabel("Ratio")
+    ax.set_ylim(0.0, 1.05)
+    ax.grid(True, alpha=0.25)
+    ax.legend(loc="best", fontsize=8, frameon=False)
+    _report_plot_key_audit(
+        "greedy_candidate_rejection_debug.ratios",
+        [
+            ("greedy_hf_reject_reliability_ratio", rej_rel),
+            ("greedy_hf_reject_power_ratio", rej_pwr),
+            ("greedy_hf_reject_min_rate_ratio", rej_min),
+            ("greedy_hf_reject_share_cap_ratio", rej_share),
+            ("greedy_hf_feasible_ratio", feasible),
+        ],
+    )
+
+    ax = axes[1]
+    ax.plot(loads, eval_per_dec, color="tab:blue", marker="s", linewidth=2.0, label="evaluated candidates / decision")
+    ax.plot(
+        loads,
+        np.asarray(metrics.get("greedy_hf_candidate_feasible_per_decision", np.zeros_like(loads)), dtype=float),
+        color="tab:green",
+        marker="^",
+        linewidth=2.0,
+        label="feasible candidates / decision",
+    )
+    ax.set_title("Greedy candidate volume")
+    ax.set_xlabel("Average UE load per UAV")
+    ax.set_ylabel("Count")
+    ax.grid(True, alpha=0.25)
+    ax.legend(loc="best", fontsize=8, frameon=False)
+
+    if title_suffix:
+        fig.suptitle(str(title_suffix), fontsize=10)
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    path = RESULTS_DIR / "greedy_candidate_rejection_debug.png"
     fig.savefig(path, dpi=220)
     plt.close(fig)
     return path
@@ -4210,15 +4688,59 @@ def plot_local_puncture_deduction_debug_fast(
     fig, axes = plt.subplots(1, 3, figsize=(18.0, 4.6), constrained_layout=True)
     axes = np.asarray(axes).reshape(1, 3)
 
-    def _get(series: Dict, key: str) -> np.ndarray:
+    def _series_or_nan(series: Dict, key: str) -> np.ndarray:
         y = np.asarray(series.get(key, []), dtype=float)
-        return y if y.size == loads.size else np.zeros_like(loads, dtype=float)
+        if y.size == loads.size:
+            return y
+        return np.full(loads.shape, np.nan, dtype=float)
+
+    def _resolve_local_puncture_series(series: Dict, key: str) -> np.ndarray:
+        # Prefer explicit diagnostics when available.
+        direct = _series_or_nan(series, key)
+        if np.isfinite(direct).any():
+            return direct
+
+        # Fallbacks for older/partial baseline payloads:
+        # - Use eMBB rate-with-intercell as effective rate proxy.
+        # - If loss is requested and we have raw/effective, derive as difference.
+        if key == 'embb_rate_after_local_puncture_deduction':
+            proxy = _series_or_nan(series, 'embb_rate_with_intercell')
+            if not np.isfinite(proxy).any():
+                proxy = _series_or_nan(series, 'embb_rate')
+            return proxy
+
+        if key == 'embb_rate_raw_before_local_puncture_deduction':
+            proxy = _series_or_nan(series, 'embb_rate_raw_before_local_puncture_deduction')
+            if np.isfinite(proxy).any():
+                return proxy
+            # If raw is missing, fall back to effective so we don't draw fake zeros.
+            eff = _resolve_local_puncture_series(series, 'embb_rate_after_local_puncture_deduction')
+            return eff
+
+        if key == 'embb_rate_loss_due_to_local_puncture':
+            raw = _resolve_local_puncture_series(series, 'embb_rate_raw_before_local_puncture_deduction')
+            eff = _resolve_local_puncture_series(series, 'embb_rate_after_local_puncture_deduction')
+            if np.isfinite(raw).any() and np.isfinite(eff).any():
+                return raw - eff
+            return np.full(loads.shape, np.nan, dtype=float)
+
+        return np.full(loads.shape, np.nan, dtype=float)
 
     def _plot(ax, key: str, title: str, ylabel: str, *, div: float = 1.0):
-        m = _get(rl, key) / div
-        g = _get(baseline, key) / div
+        m = _resolve_local_puncture_series(rl, key) / div
+        g = _resolve_local_puncture_series(baseline, key) / div
         ax.plot(loads, m, color='tab:orange', marker='s', markersize=6, linewidth=2.0, label='MAPPO (solid)')
-        ax.plot(loads, g, color='tab:brown', marker='o', markersize=6, linewidth=2.0, linestyle='--', label=f'{baseline_label} (dashed)')
+        if np.isfinite(g).any():
+            ax.plot(loads, g, color='tab:brown', marker='o', markersize=6, linewidth=2.0, linestyle='--', label=f'{baseline_label} (dashed)')
+        else:
+            ax.text(
+                0.03,
+                0.08,
+                f'{baseline_label} metric unavailable',
+                transform=ax.transAxes,
+                fontsize=8,
+                color='tab:brown',
+            )
         _style(ax, title, 'Average UE load per UAV', ylabel)
         ax.legend(loc="best", fontsize=8, frameon=False)
 
@@ -5624,6 +6146,32 @@ def plot_training_diagnostics(history: List[Dict], rl_metrics: Dict):
     return path
 
 
+def plot_training_reward_curve(history: List[Dict]):
+    fig, ax = plt.subplots(figsize=(10, 5), constrained_layout=True)
+    episodes = [record.get('iteration', idx + 1) for idx, record in enumerate(history)]
+    rewards = [record.get('update', {}).get('mean_reward', np.nan) for record in history]
+    if episodes:
+        y = np.asarray(rewards, dtype=float)
+        ax.plot(episodes, y, marker='o', linewidth=1.0, alpha=0.65, label='rollout reward')
+        finite = y[np.isfinite(y)]
+        if finite.size >= 10:
+            win = min(51, max(11, (len(y) // 20) * 2 + 1))
+            fill_value = float(np.mean(finite))
+            y_clean = np.where(np.isfinite(y), y, fill_value)
+            kernel = np.ones(win, dtype=float) / float(win)
+            y_pad = np.pad(y_clean, (win // 2, win // 2), mode='edge')
+            smooth = np.convolve(y_pad, kernel, mode='valid')[:len(y)]
+            ax.plot(episodes, smooth, linewidth=2.0, label=f'moving average ({win})')
+        ax.legend(fontsize=9)
+    else:
+        ax.text(0.5, 0.5, 'No training history available', ha='center', va='center', transform=ax.transAxes)
+    _style(ax, 'Training Reward Curve', 'Training episode', 'Mean team reward')
+    path = RESULTS_DIR / 'training_reward_curve.png'
+    fig.savefig(path, dpi=200)
+    plt.close(fig)
+    return path
+
+
 def plot_mode_anchor_debug(history: List[Dict]):
     fig, ax = plt.subplots(figsize=(12, 6), constrained_layout=True)
     eval_iters: List[int] = []
@@ -5895,6 +6443,21 @@ def save_metrics_json(payload: Dict):
     return path
 
 
+def append_experiment_history_entry(entry: Dict[str, object]) -> Path:
+    path = RESULTS_DIR / "sr_mappo_experiment_history.json"
+    history: List[Dict[str, object]] = []
+    if path.exists():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, list):
+                history = loaded
+        except Exception:
+            history = []
+    history.append(entry)
+    path.write_text(json.dumps(history, indent=2, default=_json_default), encoding="utf-8")
+    return path
+
+
 def _json_default(value):
     if isinstance(value, (np.floating, np.integer)):
         return value.item()
@@ -5910,10 +6473,14 @@ def generate_report(
     experiment_line: str | None = None,
     checkpoint_path: str | None = None,
     checkpoint_kind: str | None = None,
+    greedy_only: bool = False,
+    output_dir: str | None = None,
 ):
-    global _REPORT_TIMING_ENABLED
+    global _REPORT_TIMING_ENABLED, _REPORT_RUN_SEED_BASE, _REPORT_EPISODE_CACHE_ENABLED
     report_start = perf_counter()
     _report_log("Starting report generation.")
+    if output_dir:
+        globals()['RESULTS_DIR'] = _resolve_writable_results_dir(Path(output_dir))
     _report_log(f"Results output dir: {RESULTS_DIR}")
     try:
         RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -5927,12 +6494,104 @@ def generate_report(
     if stale_removed:
         _report_log(f"Removed stale top-level report artifacts: {', '.join(sorted(stale_removed))}")
     report_cfg = apply_experiment_preset(SRMAPPOConfig(), experiment_line)
+    # Optional runtime overrides for batch experiment sweeps.
+    forced_ratio_env = os.environ.get("SR_MAPPO_REPORT_URLLC_RATIO_OVERRIDE", "").strip()
+    if forced_ratio_env:
+        try:
+            forced_ratio_val = float(forced_ratio_env)
+            report_cfg.env.urllc_user_ratio_override = float(np.clip(forced_ratio_val, 0.0, 1.0))
+            _report_log(
+                f"[OVERRIDE] urllc_user_ratio_override={report_cfg.env.urllc_user_ratio_override:.3f} "
+                f"(from SR_MAPPO_REPORT_URLLC_RATIO_OVERRIDE={forced_ratio_env})"
+            )
+        except ValueError:
+            _report_log(f"[OVERRIDE] ignore invalid SR_MAPPO_REPORT_URLLC_RATIO_OVERRIDE={forced_ratio_env!r}")
+
+    # Share semantics are globally disabled in this branch: never allow share
+    # overrides to affect URLLC admission/scheduling behavior.
+    report_cfg.env.greedy_urllc_share_mode = "none"
+    report_cfg.env.greedy_urllc_share_ratio = 0.0
+    report_cfg.env.greedy_share_reference_pre_mbps_by_load = {}
+    forced_share_env = os.environ.get("SR_MAPPO_REPORT_GREEDY_SHARE_RATIO_OVERRIDE", "").strip()
+    if forced_share_env:
+        _report_log("[OVERRIDE] ignore SR_MAPPO_REPORT_GREEDY_SHARE_RATIO_OVERRIDE because share is disabled.")
+    forced_share_ref_env = os.environ.get("SR_MAPPO_REPORT_GREEDY_SHARE_REFERENCE_PRE_MBPS_BY_LOAD", "").strip()
+    if forced_share_ref_env:
+        _report_log(
+            "[OVERRIDE] ignore SR_MAPPO_REPORT_GREEDY_SHARE_REFERENCE_PRE_MBPS_BY_LOAD because share is disabled."
+        )
+    # Report-only smoothing guard:
+    # In greedy-only + pure eMBB (URLLC ratio forced to 0), if topology/channel are frozen,
+    # episodes become near-identical and mean curves look stair-like/noisy across loads.
+    # Disable freeze here so episodes_per_load performs true Monte Carlo averaging.
+    if bool(greedy_only):
+        forced_ratio = _resolve_forced_urllc_ratio(report_cfg)
+        exp_line = str(getattr(report_cfg.training, "experiment_line", "") or "").strip().lower()
+        pure_embb_mode = (forced_ratio == 0.0) or ("v8_greedy_share10_debug" in exp_line)
+        if pure_embb_mode and (
+            bool(getattr(report_cfg.env, "freeze_association_across_episodes", False))
+            or bool(getattr(report_cfg.env, "freeze_channel_gains_across_episodes", False))
+        ):
+            report_cfg.env.freeze_association_across_episodes = False
+            report_cfg.env.freeze_channel_gains_across_episodes = False
+            _report_log(
+                "[GREEDY] pure-eMBB report mode: disable freeze_assoc/freeze_channel for episode averaging."
+            )
     _REPORT_TIMING_ENABLED = bool(getattr(report_cfg.training, "enable_timing_logs", False))
     _reset_report_runtime_cache()
-    fast_debug = bool(fast) or bool(getattr(report_cfg.training, "report_fast_debug", False))
+    _REPORT_RUN_SEED_BASE = _init_report_run_seed_base(report_cfg)
+    _report_log(f"Report run seed base: {_REPORT_RUN_SEED_BASE} (per-load paired; per-episode increments)")
+    # Default to lite/fast-debug style report unless explicitly disabled by preset.
+    # This keeps report generation concise without requiring `--fast` every run.
+    report_lite_default = bool(getattr(report_cfg.training, "report_lite_default", True))
+    fast_debug = bool(fast) or bool(getattr(report_cfg.training, "report_fast_debug", False)) or report_lite_default
+    _REPORT_EPISODE_CACHE_ENABLED = not (bool(fast_debug) and bool(greedy_only))
     loads = loads or (FAST_LOADS if fast else DEFAULT_LOADS)
+    loads_override_env = os.environ.get("SR_MAPPO_REPORT_LOADS_OVERRIDE", "").strip()
+    if loads_override_env:
+        try:
+            parsed_loads = [float(x.strip()) for x in loads_override_env.split(",") if x.strip()]
+            if parsed_loads:
+                loads = parsed_loads
+                _report_log(
+                    f"[OVERRIDE] loads={loads} "
+                    f"(from SR_MAPPO_REPORT_LOADS_OVERRIDE={loads_override_env})"
+                )
+        except ValueError:
+            _report_log(
+                f"[OVERRIDE] ignore invalid SR_MAPPO_REPORT_LOADS_OVERRIDE={loads_override_env!r}"
+            )
+    exp_line_norm = str(getattr(report_cfg.training, "experiment_line", "") or "").strip().lower()
+    if bool(greedy_only) and bool(fast_debug) and (
+        ("v8_greedy_mix37_debug" in exp_line_norm)
+        or ("v8_greedy_mix55_debug" in exp_line_norm)
+        or ("v8_greedy_mix73_debug" in exp_line_norm)
+        or ("v8_greedy_mix010_debug" in exp_line_norm)
+        or ("v8_greedy_mix100_debug" in exp_line_norm)
+    ):
+        episodes_per_load = 100
+    # Runtime override for batch scripts.
+    episodes_override_env = os.environ.get("SR_MAPPO_REPORT_EPISODES_PER_LOAD_OVERRIDE", "").strip()
+    if episodes_override_env:
+        try:
+            episodes_per_load = max(1, int(episodes_override_env))
+            _report_log(
+                f"[OVERRIDE] episodes_per_load={episodes_per_load} "
+                f"(from SR_MAPPO_REPORT_EPISODES_PER_LOAD_OVERRIDE={episodes_override_env})"
+            )
+        except ValueError:
+            _report_log(
+                f"[OVERRIDE] ignore invalid SR_MAPPO_REPORT_EPISODES_PER_LOAD_OVERRIDE={episodes_override_env!r}"
+            )
     if fast_debug:
-        episodes_per_load = min(int(episodes_per_load), FAST_EPISODES_PER_LOAD)
+        if greedy_only:
+            # Greedy-only fast debug should respect provided episodes_per_load for
+            # quick iterative debugging.
+            episodes_per_load = max(1, int(episodes_per_load))
+        else:
+            # Fast mode should still honor user-specified episode overrides so
+            # comparisons can be made with stable statistics (e.g., ep10/ep20).
+            episodes_per_load = max(1, int(episodes_per_load))
     representative_load = float(loads[-1]) if loads else REPRESENTATIVE_LOAD
     checkpoint, checkpoint_reason = _select_checkpoint(
         report_cfg,
@@ -5974,7 +6633,9 @@ def generate_report(
         f"phase={report_cfg.env.phase} | "
         f"learn_embb_baseline={bool(report_cfg.env.learn_embb_baseline)} | "
         f"learn_phase0_embb_power={bool(getattr(report_cfg.env, 'learn_phase0_embb_power', True))} | "
-        f"allow_phase_a_embb_power_adjustment={bool(report_cfg.env.allow_phase_a_embb_power_adjustment)}"
+        f"allow_phase_a_embb_power_adjustment={bool(report_cfg.env.allow_phase_a_embb_power_adjustment)} | "
+        f"freeze_assoc={bool(getattr(report_cfg.env, 'freeze_association_across_episodes', False))} | "
+        f"freeze_channel={bool(getattr(report_cfg.env, 'freeze_channel_gains_across_episodes', False))}"
     )
     _report_log(
         "Shield control: "
@@ -6019,16 +6680,22 @@ def generate_report(
             _report_log("Scenario dims: (unavailable)")
         _report_log("URLLC throughput is slot-based estimate: scheduled packets x avg packet bits / 1 ms slot.")
         _report_log(f"Core KPI loads: {[float(x) for x in list(loads)]} | episodes_per_load={int(episodes_per_load)}")
-        rl_metrics, _rl_rep = run_mappo_sweep(loads, episodes_per_load, checkpoint, base_cfg=report_cfg)
-        rl_metrics["terminal_admission_floor_soft_penalty_floor"] = float(
-            getattr(report_cfg.reward, "terminal_admission_floor_soft_penalty_floor", 0.0) or 0.0
-        )
+        if greedy_only:
+            _report_log("Fast greedy-only mode: skipping SR-MAPPO sweep.")
+            rl_metrics = {}
+            _rl_rep = {}
+        else:
+            rl_metrics, _rl_rep = run_mappo_sweep(loads, episodes_per_load, checkpoint, base_cfg=report_cfg)
+            rl_metrics["terminal_admission_floor_soft_penalty_floor"] = float(
+                getattr(report_cfg.reward, "terminal_admission_floor_soft_penalty_floor", 0.0) or 0.0
+            )
         if greedy_baseline_mode == "hard_feasible_throughput_greedy":
             baseline_metrics, _baseline_rep = run_hard_feasible_throughput_greedy_sweep(
                 loads,
                 episodes_per_load,
                 checkpoint,
                 base_cfg=report_cfg,
+                verbose_per_episode=(not (fast_debug and greedy_only and (not FAST_GREEDY_ONLY_VERBOSE_PER_EPISODE))),
             )
         elif greedy_baseline_mode == "myopic_throughput_greedy":
             baseline_metrics, _baseline_rep = run_myopic_throughput_greedy_sweep(
@@ -6046,6 +6713,17 @@ def generate_report(
                 report_cfg,
                 checkpoint,
             )
+        # Keep UAV-UE distribution available in fast-debug mode.
+        if greedy_only:
+            uav_ue_distribution_bundle = {}
+            uav_ue_distribution_paths = []
+        else:
+            uav_ue_distribution_bundle = _build_uav_ue_distribution_bundle(_rl_rep, loads)
+            uav_ue_distribution_paths = plot_uav_ue_distribution(_rl_rep, loads)
+
+        if greedy_only:
+            # In greedy-only mode, use baseline as both inputs so no MAPPO series appears.
+            rl_metrics = dict(baseline_metrics)
 
         # Derived separation diagnostics (arrays aligned to `loads`).
         try:
@@ -6071,118 +6749,163 @@ def generate_report(
             f"baseline={greedy_baseline_mode} | "
             f"lambda={float(base_poisson_rate):.0f} (fixed={bool(base_poisson_fixed)})"
         )
-        output_paths = [
-            str(plot_core_kpi_debug_fast(
-                rl_metrics,
-                baseline_metrics,
-                baseline_label="Greedy",
-                legend_title=legend_title,
-            )),
-            str(plot_urllc_reliability_debug_fast(
-                rl_metrics,
-                baseline_metrics,
-                baseline_label="Greedy",
-                reliability_target=float(debug_reliability_target),
-            )),
-            str(plot_intercell_vs_load_debug_fast(
-                rl_metrics,
-                baseline_metrics,
-                baseline_label="Greedy",
-            )),
-            str(plot_intercell_rate_loss_debug_fast(
-                rl_metrics,
-                baseline_metrics,
-                baseline_label="Greedy",
-            )),
-            str(plot_local_puncture_deduction_debug_fast(
-                rl_metrics,
-                baseline_metrics,
-                baseline_label="Greedy",
-            )),
-            str(plot_owner_effective_debug_fast(rl_metrics)),
-            str(plot_phaseA_power_debug_fast(rl_metrics)),
-            str(plot_phaseA_negative_only_debug_fast(
-                rl_metrics,
-                baseline_metrics,
-                baseline_label="Greedy",
-            )),
-            str(plot_service_recovery_debug_fast(
-                rl_metrics,
-                baseline_metrics,
-                baseline_label="Greedy",
-            )),
-            str(plot_service_separation_debug_fast(
-                rl_metrics,
-                baseline_metrics,
-                baseline_label="Greedy",
-            )),
-            str(plot_service_target_debug_fast(
-                rl_metrics,
-                baseline_metrics,
-                baseline_label="Greedy",
-                urllc_admission_floor=float(getattr(report_cfg.reward, "terminal_admission_floor_soft_penalty_floor", 0.0) or 0.0),
-            )),
-            str(plot_service_oracle_debug_fast(
-                rl_metrics,
-                baseline_metrics,
-                baseline_label="Greedy",
-                num_uavs=int(debug_num_uavs),
-                num_rbs=int(debug_num_rbs),
-            )),
-        ]
+        if greedy_only:
+            output_paths = [
+                str(plot_core_kpi_debug_fast(
+                    rl_metrics,
+                    baseline_metrics,
+                    baseline_label="Greedy",
+                    legend_title=legend_title,
+                    greedy_only=True,
+                )),
+                str(plot_urllc_arrival_admit_debug(
+                    baseline_metrics,
+                    episodes_per_load=int(episodes_per_load),
+                    title_suffix=f"{report_cfg.training.experiment_line} | Greedy only",
+                )),
+                str(plot_greedy_candidate_rejection_debug(
+                    baseline_metrics,
+                    title_suffix=f"{report_cfg.training.experiment_line} | Greedy candidate diagnostics",
+                )),
+            ]
+        else:
+            output_paths = [
+                str(plot_core_kpi_debug_fast(
+                    rl_metrics,
+                    baseline_metrics,
+                    baseline_label="Greedy",
+                    legend_title=legend_title,
+                )),
+                str(plot_urllc_reliability_debug_fast(
+                    rl_metrics,
+                    baseline_metrics,
+                    baseline_label="Greedy",
+                    reliability_target=float(debug_reliability_target),
+                )),
+                str(plot_intercell_vs_load_debug_fast(
+                    rl_metrics,
+                    baseline_metrics,
+                    baseline_label="Greedy",
+                )),
+                str(plot_intercell_rate_loss_debug_fast(
+                    rl_metrics,
+                    baseline_metrics,
+                    baseline_label="Greedy",
+                )),
+                str(plot_local_puncture_deduction_debug_fast(
+                    rl_metrics,
+                    baseline_metrics,
+                    baseline_label="Greedy",
+                )),
+                str(plot_owner_effective_debug_fast(rl_metrics)),
+                str(plot_phaseA_power_debug_fast(rl_metrics)),
+                str(plot_phaseA_negative_only_debug_fast(
+                    rl_metrics,
+                    baseline_metrics,
+                    baseline_label="Greedy",
+                )),
+                str(plot_service_recovery_debug_fast(
+                    rl_metrics,
+                    baseline_metrics,
+                    baseline_label="Greedy",
+                )),
+                str(plot_service_separation_debug_fast(
+                    rl_metrics,
+                    baseline_metrics,
+                    baseline_label="Greedy",
+                )),
+                str(plot_service_target_debug_fast(
+                    rl_metrics,
+                    baseline_metrics,
+                    baseline_label="Greedy",
+                    urllc_admission_floor=float(getattr(report_cfg.reward, "terminal_admission_floor_soft_penalty_floor", 0.0) or 0.0),
+                )),
+                str(plot_service_oracle_debug_fast(
+                    rl_metrics,
+                    baseline_metrics,
+                    baseline_label="Greedy",
+                    num_uavs=int(debug_num_uavs),
+                    num_rbs=int(debug_num_rbs),
+                )),
+            ]
         sweep_load = float(getattr(report_cfg.training, "report_lambda_sweep_load", 15.0) or 15.0)
         sweep_values = list(getattr(report_cfg.training, "report_lambda_sweep_values", [4.0, 8.0, 12.0, 16.0]) or [4.0, 8.0, 12.0, 16.0])
         sweep_episodes = int(getattr(report_cfg.training, "report_lambda_sweep_episodes_per_lambda", 50) or 50)
-        _report_log(
-            f"Lambda sweep: load={float(sweep_load):.1f} | values={[float(v) for v in list(sweep_values)]} | episodes_per_lambda={int(sweep_episodes)}"
-        )
-        lambda_series = run_lambda_sweep_debug(
-            sweep_load,
-            [float(v) for v in sweep_values],
-            episodes_per_lambda=max(1, sweep_episodes),
-            checkpoint_path=checkpoint,
-            baseline_mode=greedy_baseline_mode,
-            base_cfg=report_cfg,
-        )
-        output_paths.append(str(plot_lambda_sweep_debug_fast(lambda_series, baseline_label="Greedy")))
+        sweep_disable_env = os.environ.get("SR_MAPPO_REPORT_DISABLE_LAMBDA_SWEEP", "").strip().lower()
+        sweep_disabled = sweep_disable_env in {"1", "true", "yes", "on"}
+        sweep_episodes_override_env = os.environ.get("SR_MAPPO_REPORT_LAMBDA_SWEEP_EPISODES_OVERRIDE", "").strip()
+        if sweep_episodes_override_env:
+            try:
+                sweep_episodes = max(1, int(sweep_episodes_override_env))
+                _report_log(
+                    f"[OVERRIDE] lambda_sweep_episodes_per_lambda={sweep_episodes} "
+                    f"(from SR_MAPPO_REPORT_LAMBDA_SWEEP_EPISODES_OVERRIDE={sweep_episodes_override_env})"
+                )
+            except ValueError:
+                _report_log(
+                    "[OVERRIDE] ignore invalid SR_MAPPO_REPORT_LAMBDA_SWEEP_EPISODES_OVERRIDE="
+                    f"{sweep_episodes_override_env!r}"
+                )
+        lambda_series = {}
+        if not greedy_only and not sweep_disabled:
+            _report_log(
+                f"Lambda sweep: load={float(sweep_load):.1f} | values={[float(v) for v in list(sweep_values)]} | episodes_per_lambda={int(sweep_episodes)}"
+            )
+            lambda_series = run_lambda_sweep_debug(
+                sweep_load,
+                [float(v) for v in sweep_values],
+                episodes_per_lambda=max(1, sweep_episodes),
+                checkpoint_path=checkpoint,
+                baseline_mode=greedy_baseline_mode,
+                base_cfg=report_cfg,
+            )
+            output_paths.append(str(plot_lambda_sweep_debug_fast(lambda_series, baseline_label="Greedy")))
+            output_paths.extend([str(path) for path in uav_ue_distribution_paths])
+        elif not greedy_only:
+            _report_log(
+                "[OVERRIDE] lambda sweep disabled "
+                f"(from SR_MAPPO_REPORT_DISABLE_LAMBDA_SWEEP={sweep_disable_env!r})"
+            )
+            output_paths.extend([str(path) for path in uav_ue_distribution_paths])
 
         # Owner map slot visualization (episode=0, slot=0): greedy snapshot vs MAPPO.
-        try:
-            base_sys, base_urllc, base_embb, base_algo, base_sim = _build_main_like_configs()
-            sys_cfg, urllc_cfg, embb_cfg, algo_cfg, sim_cfg = _configure_density_scenario(
-                float(sweep_load), base_sys, base_urllc, base_embb, base_algo, base_sim
-            )
-            if hasattr(base_sim, "urllc_user_ratio"):
-                sim_cfg.urllc_user_ratio = base_sim.urllc_user_ratio
-            if hasattr(sim_cfg, "fixed_urllc_poisson_rate"):
-                sim_cfg.fixed_urllc_poisson_rate = bool(base_poisson_fixed)
-            if hasattr(sim_cfg, "urllc_poisson_rate"):
-                sim_cfg.urllc_poisson_rate = float(base_poisson_rate)
-            sim_cfg.verbose = False
-            owner_env = SRMAPPOPhaseAEnv(sys_cfg, urllc_cfg, embb_cfg, algo_cfg, sim_cfg, report_cfg)
-            _owner_cfg, owner_model = _build_model_for_env(owner_env, checkpoint)
-            episode = run_env_episode(
-                owner_env,
-                model=owner_model,
-                cfg=_owner_cfg,
-                seed=0,
-                collect_trace=False,
-                use_greedy=False,
-                cache_tag=f"owner_map_slot_{sweep_load}_{base_poisson_rate}",
-            )
-            greedy_owner_map = episode.get("snapshot_owner_per_uav_rb", None)
-            policy_owner_map = episode.get("owner_per_uav_rb", None)
-            if greedy_owner_map is not None and policy_owner_map is not None:
-                output_paths.append(str(plot_owner_map_slot_debug(
-                    greedy_owner_map=np.asarray(greedy_owner_map, dtype=int),
-                    policy_owner_map=np.asarray(policy_owner_map, dtype=int),
-                    experiment_line=str(report_cfg.training.experiment_line),
-                    load=float(sweep_load),
-                    poisson_rate=float(base_poisson_rate),
-                    baseline_label=str(_baseline_label(greedy_baseline_mode)),
-                )))
-        except Exception as exc:
-            _report_log(f"[WARN] owner_map_slot_debug generation failed: {exc}")
+        if not greedy_only:
+            try:
+                base_sys, base_urllc, base_embb, base_algo, base_sim = _build_main_like_configs()
+                sys_cfg, urllc_cfg, embb_cfg, algo_cfg, sim_cfg = _configure_density_scenario(
+                    float(sweep_load), base_sys, base_urllc, base_embb, base_algo, base_sim
+                )
+                if hasattr(base_sim, "urllc_user_ratio"):
+                    sim_cfg.urllc_user_ratio = base_sim.urllc_user_ratio
+                if hasattr(sim_cfg, "fixed_urllc_poisson_rate"):
+                    sim_cfg.fixed_urllc_poisson_rate = bool(base_poisson_fixed)
+                if hasattr(sim_cfg, "urllc_poisson_rate"):
+                    sim_cfg.urllc_poisson_rate = float(base_poisson_rate)
+                sim_cfg.verbose = False
+                owner_env = SRMAPPOPhaseAEnv(sys_cfg, urllc_cfg, embb_cfg, algo_cfg, sim_cfg, report_cfg)
+                _owner_cfg, owner_model = _build_model_for_env(owner_env, checkpoint)
+                episode = run_env_episode(
+                    owner_env,
+                    model=owner_model,
+                    cfg=_owner_cfg,
+                    seed=0,
+                    collect_trace=False,
+                    use_greedy=False,
+                    cache_tag=f"owner_map_slot_{sweep_load}_{base_poisson_rate}",
+                )
+                greedy_owner_map = episode.get("snapshot_owner_per_uav_rb", None)
+                policy_owner_map = episode.get("owner_per_uav_rb", None)
+                if greedy_owner_map is not None and policy_owner_map is not None:
+                    output_paths.append(str(plot_owner_map_slot_debug(
+                        greedy_owner_map=np.asarray(greedy_owner_map, dtype=int),
+                        policy_owner_map=np.asarray(policy_owner_map, dtype=int),
+                        experiment_line=str(report_cfg.training.experiment_line),
+                        load=float(sweep_load),
+                        poisson_rate=float(base_poisson_rate),
+                        baseline_label=str(_baseline_label(greedy_baseline_mode)),
+                    )))
+            except Exception as exc:
+                _report_log(f"[WARN] owner_map_slot_debug generation failed: {exc}")
 
         try:
             sys0, _urllc0, _embb0, _algo0, sim0 = _build_main_like_configs()
@@ -6213,12 +6936,20 @@ def generate_report(
             "urllc_throughput_definition": "slot_based_estimate: scheduled_packets * avg_packet_bits / 1ms_slot",
             "loads": [float(x) for x in list(loads)],
             "episodes_per_load": int(episodes_per_load),
+            "same_scenario_pairing_enabled": True,
+            "report_run_seed_base": int(_REPORT_RUN_SEED_BASE if _REPORT_RUN_SEED_BASE is not None else 0),
+            "seeds_used_by_load": {
+                str(float(load)): [int(_report_seed_base(i, report_cfg) + ep) for ep in range(int(episodes_per_load))]
+                for i, load in enumerate(loads)
+            },
             "lambda_sweep_load": float(sweep_load),
             "lambda_sweep_values": [float(v) for v in list(sweep_values)],
             "lambda_sweep_episodes_per_lambda": int(sweep_episodes),
             "sr_mappo": rl_metrics,
             "greedy": baseline_metrics,
             "lambda_sweep_debug": lambda_series,
+            "uav_ue_distribution": uav_ue_distribution_bundle,
+            "uav_ue_distribution_plot_paths": [str(path) for path in uav_ue_distribution_paths],
         }
         metrics_path = RESULTS_DIR / "sr_mappo_report_metrics.json"
         metrics_path.write_text(json.dumps(metrics_payload, indent=2, default=_json_default), encoding="utf-8")
@@ -6231,6 +6962,7 @@ def generate_report(
         summary_lines.append(f"selected_baseline_label: {_baseline_label(greedy_baseline_mode)}")
         summary_lines.append("URLLC throughput is slot-based estimate: scheduled packets x avg packet bits / 1 ms slot.")
         summary_lines.append(f"urllc_poisson_rate: {float(base_poisson_rate):.0f} (fixed={bool(base_poisson_fixed)})")
+        summary_lines.append(f"report_run_seed_base: {int(_REPORT_RUN_SEED_BASE if _REPORT_RUN_SEED_BASE is not None else 0)}")
         try:
             _sys0, _urllc0, _embb0, _algo0, _sim0 = _build_main_like_configs()
             default_poisson = float(getattr(_sim0, "urllc_poisson_rate", float("nan")))
@@ -6271,13 +7003,13 @@ def generate_report(
 
         rl_loads = np.asarray(rl_metrics.get("loads", []), dtype=float)
         for idx, load_val in enumerate(rl_loads.tolist()):
-            embb_n = int(float(rl_metrics.get("embb_user_count", [0])[idx] if isinstance(rl_metrics.get("embb_user_count", []), list) else 0.0))
-            urllc_n = int(float(rl_metrics.get("urllc_user_count", [0])[idx] if isinstance(rl_metrics.get("urllc_user_count", []), list) else 0.0))
             def _at(data: Dict, key: str, default: float = 0.0) -> float:
                 arr = data.get(key, [])
                 if isinstance(arr, list) and idx < len(arr):
                     return float(arr[idx])
                 return float(default)
+            embb_n = int(_at(rl_metrics, "embb_user_count", 0.0))
+            urllc_n = int(_at(rl_metrics, "urllc_user_count", 0.0))
             m_embb = _at(rl_metrics, "embb_rate") / 1.0e6
             g_embb = _at(baseline_metrics, "embb_rate") / 1.0e6
             m_adm = _at(rl_metrics, "urllc_admission")
@@ -6457,8 +7189,13 @@ def generate_report(
         fallback = RESULTS_DIR / f"throughput_admission_frontier_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         fallback.write_text(frontier_payload, encoding='utf-8')
         _report_log(f"Frontier saved (fallback): {fallback}")
-    rl_metrics, rl_rep = run_mappo_sweep(loads, episodes_per_load, checkpoint, base_cfg=report_cfg)
-    _report_log("SR-MAPPO sweep completed.")
+    if greedy_only:
+        _report_log("Greedy-only mode enabled: skipping SR-MAPPO sweep.")
+        rl_metrics = dict(greedy_metrics)
+        rl_rep = dict(greedy_rep)
+    else:
+        rl_metrics, rl_rep = run_mappo_sweep(loads, episodes_per_load, checkpoint, base_cfg=report_cfg)
+        _report_log("SR-MAPPO sweep completed.")
     rl_phase_a_runtime_enabled = _metric_scalar_any(
         rl_metrics.get('phase_a_embb_power_runtime_enabled', checkpoint_meta.get('phase_a_embb_power_runtime_enabled', False)),
         default=bool(checkpoint_meta.get('phase_a_embb_power_runtime_enabled', False)),
@@ -6629,6 +7366,7 @@ def generate_report(
             comparison_baseline_mode,
         ),
         plot_training_diagnostics(history, rl_metrics),
+        plot_training_reward_curve(history),
         plot_mode_anchor_debug(history),
         plot_slot_dynamics(greedy_rep[representative_load], rl_rep[representative_load]),
         plot_single_slot_mode_maps(rl_rep[representative_load]),
@@ -6707,6 +7445,7 @@ def generate_report(
         'loads': loads,
         'episodes_per_load': episodes_per_load,
         'same_scenario_pairing_enabled': True,
+        'report_run_seed_base': int(_REPORT_RUN_SEED_BASE if _REPORT_RUN_SEED_BASE is not None else 0),
         'seeds_used_by_load': {
             str(float(load)): [int(_report_seed_base(i, report_cfg) + ep) for ep in range(int(episodes_per_load))]
             for i, load in enumerate(loads)
@@ -6772,6 +7511,7 @@ def generate_report(
             **selected_baseline_narrative,
             'coarse_sweep_loads': [float(load) for load in loads],
             'same_scenario_pairing_enabled': True,
+            'report_run_seed_base': int(_REPORT_RUN_SEED_BASE if _REPORT_RUN_SEED_BASE is not None else 0),
             'seeds_used_by_load': {
                 str(float(load)): [int(_report_seed_base(i, report_cfg) + ep) for ep in range(int(episodes_per_load))]
                 for i, load in enumerate(loads)
@@ -6786,6 +7526,8 @@ def generate_report(
             'checkpoint_eval_episodes_per_load': int(getattr(report_cfg.training, 'checkpoint_eval_episodes_per_load', 1) or 1),
             'selection_score_weights_by_load': dict(getattr(report_cfg.training, 'selection_score_weights_by_load', {})),
             'selection_throughput_ratio_floor_by_load': dict(getattr(report_cfg.training, 'selection_throughput_ratio_floor_by_load', {})),
+            'selection_service_ratio_floor_by_load': dict(getattr(report_cfg.training, 'selection_service_ratio_floor_by_load', {})),
+            'selection_minrate_ratio_floor_by_load': dict(getattr(report_cfg.training, 'selection_minrate_ratio_floor_by_load', {})),
             'selection_reliability_floor': float(getattr(report_cfg.training, 'selection_reliability_floor', 0.0) or 0.0),
             'selection_power_ratio_ceiling_by_load': dict(getattr(report_cfg.training, 'selection_power_ratio_ceiling_by_load', {})),
             'selection_puncture_ratio_floor_by_load': dict(getattr(report_cfg.training, 'selection_puncture_ratio_floor_by_load', {})),
@@ -6821,6 +7563,30 @@ def generate_report(
     })
     _report_log(f"Metrics saved: {metrics_path}")
     _report_timing_log(f"save_metrics_json sec={perf_counter() - metrics_start:.3f}")
+    history_entry = {
+        "timestamp": datetime.now().isoformat(),
+        "experiment_line": str(report_cfg.training.experiment_line),
+        "checkpoint": str(checkpoint),
+        "checkpoint_selection_reason": str(checkpoint_reason),
+        "greedy_only": bool(greedy_only),
+        "loads": [float(load) for load in loads],
+        "episodes_per_load": int(episodes_per_load),
+        "greedy_baseline_mode": str(greedy_baseline_mode),
+        "comparison_baseline_key": str(comparison_baseline_mode),
+        "metrics_path": str(metrics_path),
+        "core_series": {
+            "greedy_embb_rate_mbps": [float(x) / 1.0e6 for x in list(greedy_metrics.get("embb_rate", []))],
+            "greedy_urllc_admission": [float(x) for x in list(greedy_metrics.get("urllc_admission", []))],
+            "greedy_embb_service_ratio": [float(x) for x in list(greedy_metrics.get("embb_service_ratio", []))],
+            "greedy_urllc_tp_mbps": [float(x) for x in list(greedy_metrics.get("urllc_throughput_mbps_slot_est", []))],
+            "mappo_embb_rate_mbps": [float(x) / 1.0e6 for x in list(rl_metrics.get("embb_rate", []))] if isinstance(rl_metrics, dict) else [],
+            "mappo_urllc_admission": [float(x) for x in list(rl_metrics.get("urllc_admission", []))] if isinstance(rl_metrics, dict) else [],
+            "mappo_embb_service_ratio": [float(x) for x in list(rl_metrics.get("embb_service_ratio", []))] if isinstance(rl_metrics, dict) else [],
+            "mappo_urllc_tp_mbps": [float(x) for x in list(rl_metrics.get("urllc_throughput_mbps_slot_est", []))] if isinstance(rl_metrics, dict) else [],
+        },
+    }
+    history_path = append_experiment_history_entry(history_entry)
+    _report_log(f"Experiment history appended: {history_path}")
     manifest_path = _write_report_manifest({
         'generated_at': datetime.now().isoformat(),
         'experiment_line': report_cfg.training.experiment_line,
@@ -6844,6 +7610,7 @@ def generate_report(
         'metrics_path': str(metrics_path),
         'frontier_json_path': str(frontier_json_path),
         'owner_change_detail_debug_json': str(owner_change_detail_path),
+        'experiment_history_json': str(history_path),
         'stale_top_level_artifacts_removed': sorted(stale_removed),
     })
     _report_log(f"Manifest saved: {manifest_path}")
@@ -6864,6 +7631,7 @@ def generate_report(
         'metrics_path': str(metrics_path),
         'frontier_json_path': str(frontier_json_path),
         'manifest_path': str(manifest_path),
+        'experiment_history_path': str(history_path),
     }
 
 
@@ -6892,13 +7660,35 @@ if __name__ == '__main__':
         choices=["best_throughput", "best_balanced", "best_v5_balanced_intercell_admission", "best_v6_balanced_puncture_accounting", "latest", "final", "best"],
         help="Override report checkpoint selection with a named checkpoint kind.",
     )
+    parser.add_argument(
+        "--greedy-only",
+        action="store_true",
+        help="Skip SR-MAPPO sweep and generate report using greedy baseline only.",
+    )
+    parser.add_argument(
+        "--out-dir",
+        type=str,
+        default=None,
+        help="Optional output directory for this report run.",
+    )
     args = parser.parse_args()
+
+    output_dir = args.out_dir
+    if not output_dir:
+        # Keep compatibility with orchestrators that set SR_MAPPO_RESULTS_DIR_OVERRIDE
+        # (e.g., greedy share grid). Only auto-create a run folder for direct CLI usage.
+        if not os.environ.get("SR_MAPPO_RESULTS_DIR_OVERRIDE", "").strip():
+            exp_tag = str(args.experiment or "default").replace(":", "_").replace("/", "_")
+            ts = datetime.now(ZoneInfo("Asia/Taipei")).strftime("%Y%m%d_%H%M%S")
+            output_dir = str((RESULTS_DIR / f"report_{exp_tag}_{ts}").resolve())
 
     result = generate_report(
         fast=bool(args.fast),
         experiment_line=args.experiment,
         checkpoint_path=args.checkpoint_path,
         checkpoint_kind=args.checkpoint_kind,
+        greedy_only=bool(args.greedy_only),
+        output_dir=output_dir,
     )
     _report_log("Report generated with checkpoint:")
     _report_log(result['checkpoint'])

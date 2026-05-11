@@ -104,46 +104,117 @@ class ResourceAllocator:
                     associated_uavs[self.sys_cfg.num_urllc_users + embb_idx]
                 )
 
-        assigned_counts = np.zeros(num_embb, dtype=int)
-
         owner_per_uav_rb = np.full((self.sys_cfg.num_uavs, num_subcarriers), -1, dtype=int)
         users_per_uav = {
             uav_idx: np.where(best_uav_per_user == uav_idx)[0]
             for uav_idx in range(self.sys_cfg.num_uavs)
         }
 
-        # Greedy RB assignment: per UAV, pick best eMBB user on each RB
-        for uav_idx in range(self.sys_cfg.num_uavs):
-            candidate_users = users_per_uav[uav_idx]
-            if candidate_users.size == 0:
-                continue
-            for rb_idx in range(num_subcarriers):
-                best_user = int(candidate_users[0])
-                best_score = -np.inf
-                for embb_idx in candidate_users:
-                    user_idx = self.sys_cfg.num_urllc_users + embb_idx
-                    tentative_count = assigned_counts[embb_idx] + 1
-                    per_rb_power = max_power_per_user[embb_idx] / tentative_count
-                    channel_gain_sq = channel_gains_mag_sq[user_idx, uav_idx, rb_idx]
-                    snir = per_rb_power * channel_gain_sq / self.sys_cfg.noise_power
-                    rb_rate = self.capacity_model.shannon_capacity(
-                        snir, self.sys_cfg.subcarrier_bw
-                    )
-                    score = rb_rate
-                    if score > best_score:
-                        best_score = score
-                        best_user = int(embb_idx)
-                embb_rb_alloc[best_user, rb_idx] = 1
-                alpha_e[best_user, uav_idx, rb_idx] = 1
-                owner_per_uav_rb[uav_idx, rb_idx] = best_user
-                assigned_counts[best_user] += 1
+        min_rate_target = float(getattr(self.embb_cfg, "min_rate_per_user_bps", 2.0e6) or 2.0e6)
+        def _power_from_alloc(rb_alloc: np.ndarray) -> np.ndarray:
+            tx = np.zeros(num_embb, dtype=float)
+            for embb_idx in range(num_embb):
+                quota = int(np.sum(rb_alloc[embb_idx, :]))
+                load_fraction = quota / max(num_subcarriers, 1)
+                tx[embb_idx] = float(max_power_per_user[embb_idx] * load_fraction)
+            return tx
+
+        def _evaluate_objective(rb_alloc: np.ndarray, phase: str) -> tuple[float, float]:
+            tx_powers = _power_from_alloc(rb_alloc)
+            state = self._compute_embb_state(
+                rb_alloc,
+                channel_gains_mag_sq,
+                best_uav_per_user,
+                tx_powers,
+            )
+            rates = np.asarray(state["rates"], dtype=float)
+            minrate_progress = float(np.sum(np.minimum(rates, min_rate_target)))
+            total_rate = float(np.sum(rates))
+            if phase == "minrate":
+                return (minrate_progress, total_rate)
+            return (total_rate, minrate_progress)
+
+        candidate_cells = [
+            (uav_idx, rb_idx)
+            for uav_idx in range(self.sys_cfg.num_uavs)
+            for rb_idx in range(num_subcarriers)
+            if users_per_uav[uav_idx].size > 0
+        ]
+
+        minrate_fully_satisfied = False
+        resource_limited_infeasible = False
+        for phase in ("minrate", "throughput"):
+            if phase == "throughput" and not minrate_fully_satisfied:
+                # User policy: throughput enhancement is allowed only after
+                # all eMBB users satisfy the minimum-rate target.
+                break
+                current_obj = _evaluate_objective(embb_rb_alloc, phase=phase)
+            unassigned = set(candidate_cells)
+            while unassigned:
+                rates_now = np.asarray(
+                    self._compute_embb_state(
+                        embb_rb_alloc,
+                        channel_gains_mag_sq,
+                        best_uav_per_user,
+                        _power_from_alloc(embb_rb_alloc),
+                    )["rates"],
+                    dtype=float,
+                )
+                unmet_users = set(np.where(rates_now < (min_rate_target - 1.0))[0].tolist())
+                best_move = None
+                best_score = None
+                best_alloc = None
+                for uav_idx, rb_idx in list(unassigned):
+                    if phase == "minrate":
+                        candidate_users = np.asarray(
+                            [u for u in users_per_uav[uav_idx] if int(u) in unmet_users],
+                            dtype=int,
+                        )
+                        if candidate_users.size <= 0:
+                            continue
+                        # User-requested behavior: in min-rate phase, choose unmet users randomly
+                        # instead of ranking by deficit-coverage efficiency.
+                        np.random.shuffle(candidate_users)
+                    else:
+                        candidate_users = users_per_uav[uav_idx]
+                    for embb_idx in candidate_users:
+                        trial = embb_rb_alloc.copy()
+                        trial[embb_idx, rb_idx] = 1
+                        score = _evaluate_objective(trial, phase=phase)
+                        if (best_score is None) or (score > best_score):
+                            best_score = score
+                            best_move = (uav_idx, rb_idx, int(embb_idx))
+                            best_alloc = trial
+                if best_move is None or best_alloc is None or best_score is None:
+                    break
+                # In throughput phase, only accept strict improvements.
+                if phase == "throughput" and best_score <= current_obj:
+                    break
+                embb_rb_alloc = best_alloc
+                uav_idx, rb_idx, embb_idx = best_move
+                alpha_e[embb_idx, uav_idx, rb_idx] = 1
+                owner_per_uav_rb[uav_idx, rb_idx] = embb_idx
+                unassigned.discard((uav_idx, rb_idx))
+                current_obj = best_score
+            if phase == "minrate":
+                rates_after_min = np.asarray(
+                    self._compute_embb_state(
+                        embb_rb_alloc,
+                        channel_gains_mag_sq,
+                        best_uav_per_user,
+                        _power_from_alloc(embb_rb_alloc),
+                    )["rates"],
+                    dtype=float,
+                )
+                minrate_fully_satisfied = bool(np.all(rates_after_min >= min_rate_target - 1.0))
+                if minrate_fully_satisfied:
+                    continue
+                # Resource exhausted with unresolved min-rate deficits.
+                resource_limited_infeasible = True
+                break
 
         # Convert per-user RB counts into per-user transmit power budgets
-        embb_tx_powers = np.zeros(num_embb)
-        for embb_idx in range(num_embb):
-            quota = int(np.sum(embb_rb_alloc[embb_idx, :]))
-            load_fraction = quota / max(num_subcarriers, 1)
-            embb_tx_powers[embb_idx] = max_power_per_user[embb_idx] * load_fraction
+        embb_tx_powers = _power_from_alloc(embb_rb_alloc)
 
         # Refresh allocator state before recomputing eMBB rates. The rate
         # evaluation path reuses per-UAV owners and per-RB powers to estimate
@@ -174,6 +245,8 @@ class ResourceAllocator:
             'power_allocation': baseline['power_allocation'],
             'rates': baseline['rates'],
             'total_rate': np.sum(baseline['rates']),
+            'minrate_fully_satisfied': bool(minrate_fully_satisfied),
+            'resource_limited_infeasible': bool(resource_limited_infeasible),
             'owner_per_rb': baseline['owner_per_rb'],
             'owner_per_uav_rb': owner_per_uav_rb,
             'best_uav_per_user': best_uav_per_user,

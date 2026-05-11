@@ -2,9 +2,11 @@
 
 from copy import deepcopy
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 from typing import Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import torch
@@ -186,10 +188,14 @@ def _timing_enabled(cfg) -> bool:
     return bool(getattr(cfg.training, "enable_timing_logs", False))
 
 
+def _tw_timestamp() -> str:
+    return datetime.now(ZoneInfo("Asia/Taipei")).isoformat(timespec="seconds")
+
+
 def _trainer_timing_log(cfg, message: str) -> None:
     if not _timing_enabled(cfg):
         return
-    timestamp = np.datetime64("now")
+    timestamp = _tw_timestamp()
     print(f"[{timestamp}] [SR-MAPPO][TIMING] {message}", flush=True)
 
 
@@ -1899,6 +1905,156 @@ class SRMAPPOTrainer:
                 'owner_dropped_raw_churn_ratio': float(
                     np.mean([item.get('owner_dropped_raw_churn_ratio', item.get('phase0_owner_change_dropped_over_budget_ratio', 0.0)) for item in episode_summaries])
                 ),
+                'owner_candidate_relaxed_ratio': float(
+                    np.mean([item.get('owner_candidate_relaxed_ratio', 0.0) for item in episode_summaries])
+                ),
+                'owner_candidate_fallback_used_ratio': float(
+                    np.mean([item.get('owner_candidate_fallback_used_ratio', 0.0) for item in episode_summaries])
+                ),
+                'owner_objective_gain_pre_filter_mean': float(
+                    np.mean([item.get('owner_objective_gain_pre_filter_mean', 0.0) for item in episode_summaries])
+                ),
+                'owner_objective_gain_post_filter_mean': float(
+                    np.mean([item.get('owner_objective_gain_post_filter_mean', 0.0) for item in episode_summaries])
+                ),
+                'owner_obj_mean': float(
+                    np.mean([item.get('owner_obj_mean', 0.0) for item in episode_summaries])
+                ),
+                'owner_obj_std': float(
+                    np.mean([item.get('owner_obj_std', 0.0) for item in episode_summaries])
+                ),
+                'owner_gate_threshold': float(
+                    np.mean([item.get('owner_gate_threshold', 0.0) for item in episode_summaries])
+                ),
+                'owner_candidate_after_gate_ratio': float(
+                    np.mean([item.get('owner_candidate_after_gate_ratio', 0.0) for item in episode_summaries])
+                ),
+                'owner_positive_candidate_count_mean': float(
+                    np.mean([item.get('owner_positive_candidate_count_mean', 0.0) for item in episode_summaries])
+                ),
+                'owner_neg_accept_clipped_ratio': float(
+                    np.mean([item.get('owner_neg_accept_clipped_ratio', 0.0) for item in episode_summaries])
+                ),
+                'owner_neg_rejected_by_quota_ratio': float(
+                    np.mean([item.get('owner_neg_rejected_by_quota_ratio', 0.0) for item in episode_summaries])
+                ),
+                'owner_neg_accept_ratio': float(
+                    np.mean([item.get('owner_neg_accept_ratio', item.get('owner_negative_but_accepted_ratio', 0.0)) for item in episode_summaries])
+                ),
+                'owner_pos_selected_ratio': float(
+                    np.mean([item.get('owner_pos_selected_ratio', 0.0) for item in episode_summaries])
+                ),
+                'owner_neg_selected_count': float(
+                    np.mean([item.get('owner_neg_selected_count', 0.0) for item in episode_summaries])
+                ),
+                'owner_pos_selected_count': float(
+                    np.mean([item.get('owner_pos_selected_count', 0.0) for item in episode_summaries])
+                ),
+                'owner_selected_positive_count_mean': float(
+                    np.mean([item.get('owner_selected_positive_count_mean', item.get('owner_pos_selected_count', 0.0)) for item in episode_summaries])
+                ),
+                'owner_selected_negative_count_mean': float(
+                    np.mean([item.get('owner_selected_negative_count_mean', item.get('owner_neg_selected_count', 0.0)) for item in episode_summaries])
+                ),
+                'owner_selected_count': float(
+                    np.mean([item.get('owner_selected_count', 0.0) for item in episode_summaries])
+                ),
+                'owner_final_selected_count': float(
+                    np.mean([item.get('owner_final_selected_count', item.get('owner_selected_count', 0.0)) for item in episode_summaries])
+                ),
+                'owner_final_pos_selected_count': float(
+                    np.mean([item.get('owner_final_pos_selected_count', item.get('owner_pos_selected_count', 0.0)) for item in episode_summaries])
+                ),
+                'owner_final_neg_selected_count': float(
+                    np.mean([item.get('owner_final_neg_selected_count', item.get('owner_neg_selected_count', 0.0)) for item in episode_summaries])
+                ),
+                'owner_final_safe_relax_selected_count': float(
+                    np.mean([item.get('owner_final_safe_relax_selected_count', item.get('owner_safe_relax_selected_count_mean', 0.0)) for item in episode_summaries])
+                ),
+                'owner_final_keep_set_size': float(
+                    np.mean([item.get('owner_final_keep_set_size', item.get('owner_selected_count', 0.0)) for item in episode_summaries])
+                ),
+                'owner_allowed_k': float(
+                    np.mean([item.get('owner_allowed_k', 0.0) for item in episode_summaries])
+                ),
+                'owner_selection_fill_ratio': float(
+                    np.mean([item.get('owner_selection_fill_ratio', 0.0) for item in episode_summaries])
+                ),
+                'owner_positive_shortage_ratio': float(
+                    np.mean([item.get('owner_positive_shortage_ratio', 0.0) for item in episode_summaries])
+                ),
+                'owner_negative_blocked_due_to_quota_ratio': float(
+                    np.mean([item.get('owner_negative_blocked_due_to_quota_ratio', 0.0) for item in episode_summaries])
+                ),
+                'owner_safe_relaxed_used_ratio': float(
+                    np.mean([item.get('owner_safe_relaxed_used_ratio', 0.0) for item in episode_summaries])
+                ),
+                'owner_safe_relaxed_candidate_count': float(
+                    np.mean([item.get('owner_safe_relaxed_candidate_count', 0.0) for item in episode_summaries])
+                ),
+                'owner_safe_relaxed_selected_count': float(
+                    np.mean([item.get('owner_safe_relaxed_selected_count', 0.0) for item in episode_summaries])
+                ),
+                'owner_safe_relax_selected_count_mean': float(
+                    np.mean([item.get('owner_safe_relax_selected_count_mean', item.get('owner_safe_relaxed_selected_count', 0.0)) for item in episode_summaries])
+                ),
+                'owner_safe_relaxed_avg_objective': float(
+                    np.mean([item.get('owner_safe_relaxed_avg_objective', 0.0) for item in episode_summaries])
+                ),
+                'owner_safe_relaxed_service_delta_mean': float(
+                    np.mean([item.get('owner_safe_relaxed_service_delta_mean', 0.0) for item in episode_summaries])
+                ),
+                'owner_safe_relaxed_intercell_delta_mean': float(
+                    np.mean([item.get('owner_safe_relaxed_intercell_delta_mean', 0.0) for item in episode_summaries])
+                ),
+                'owner_near_zero_objective_ratio': float(
+                    np.mean([item.get('owner_near_zero_objective_ratio', 0.0) for item in episode_summaries])
+                ),
+                'owner_positive_after_relax_ratio': float(
+                    np.mean([item.get('owner_positive_after_relax_ratio', 0.0) for item in episode_summaries])
+                ),
+                'owner_safe_relax_disabled_ratio': float(
+                    np.mean([item.get('owner_safe_relax_disabled_ratio', 0.0) for item in episode_summaries])
+                ),
+                'owner_safe_relax_off_ratio': float(
+                    np.mean([item.get('owner_safe_relax_off_ratio', item.get('owner_safe_relax_disabled_ratio', 0.0)) for item in episode_summaries])
+                ),
+                'owner_negative_but_accepted_ratio': float(
+                    np.mean([item.get('owner_negative_but_accepted_ratio', 0.0) for item in episode_summaries])
+                ),
+                'owner_neg_accepted_with_positive_candidate_ratio': float(
+                    np.mean([item.get('owner_neg_accepted_with_positive_candidate_ratio', 0.0) for item in episode_summaries])
+                ),
+                'phaseA_positive_ratio': float(
+                    np.mean([item.get('phaseA_positive_ratio', 0.0) for item in episode_summaries])
+                ),
+                'phaseA_zero_action_ratio': float(
+                    np.mean([item.get('phaseA_zero_action_ratio', 0.0) for item in episode_summaries])
+                ),
+                'phaseA_power_reduction_l2_penalty': float(
+                    np.mean([item.get('phaseA_power_reduction_l2_penalty', 0.0) for item in episode_summaries])
+                ),
+                'phaseA_power_saturation_penalty': float(
+                    np.mean([item.get('phaseA_power_saturation_penalty', 0.0) for item in episode_summaries])
+                ),
+                'embb_service_floor_hinge_penalty': float(
+                    np.mean([item.get('embb_service_floor_hinge_penalty', 0.0) for item in episode_summaries])
+                ),
+                'phaseA_delta_lt_neg09_ratio': float(
+                    np.mean([item.get('phaseA_delta_lt_neg09_ratio', 0.0) for item in episode_summaries])
+                ),
+                'phaseA_delta_mean': float(
+                    np.mean([item.get('phaseA_delta_mean', 0.0) for item in episode_summaries])
+                ),
+                'phaseA_delta_p10': float(
+                    np.mean([item.get('phaseA_delta_p10', 0.0) for item in episode_summaries])
+                ),
+                'phaseA_delta_p50': float(
+                    np.mean([item.get('phaseA_delta_p50', 0.0) for item in episode_summaries])
+                ),
+                'phaseA_delta_p90': float(
+                    np.mean([item.get('phaseA_delta_p90', 0.0) for item in episode_summaries])
+                ),
                 'phase0_owner_candidate_positive_objective_ratio': float(
                     np.mean([item.get('phase0_owner_candidate_positive_objective_ratio', 0.0) for item in episode_summaries])
                 ),
@@ -2501,6 +2657,8 @@ def run_training_loop(cfg, evaluation_fn=None, resume_path: Optional[Path] = Non
         dict(getattr(cfg.training, "selection_admission_floor_by_load", {}) or {})
         or dict(getattr(cfg.training, "selection_power_ratio_ceiling_by_load", {}) or {})
         or dict(getattr(cfg.training, "selection_throughput_ratio_floor_by_load", {}) or {})
+        or dict(getattr(cfg.training, "selection_service_ratio_floor_by_load", {}) or {})
+        or dict(getattr(cfg.training, "selection_minrate_ratio_floor_by_load", {}) or {})
         or dict(getattr(cfg.training, "selection_puncture_ratio_floor_by_load", {}) or {})
         or dict(getattr(cfg.training, "selection_overlay_ratio_ceiling_by_load", {}) or {})
         or float(getattr(cfg.training, "selection_reliability_floor", 0.0) or 0.0) > 0.0
@@ -2897,7 +3055,7 @@ def run_training_loop(cfg, evaluation_fn=None, resume_path: Optional[Path] = Non
                     f"(streak={dead_phase_a_eval_streak})"
                 )
                 record.setdefault('warnings', []).append(warning)
-                print(f"[{np.datetime64('now')}] [SR-MAPPO][WARN] {warning}", flush=True)
+                print(f"[{_tw_timestamp()}] [SR-MAPPO][WARN] {warning}", flush=True)
             if frozen_owner_eval_streak >= 3:
                 warning = (
                     "Phase-0 owner head is effectively frozen: "
@@ -2912,7 +3070,7 @@ def run_training_loop(cfg, evaluation_fn=None, resume_path: Optional[Path] = Non
                     f"(streak={frozen_owner_eval_streak})"
                 )
                 record.setdefault('warnings', []).append(warning)
-                print(f"[{np.datetime64('now')}] [SR-MAPPO][WARN] {warning}", flush=True)
+                print(f"[{_tw_timestamp()}] [SR-MAPPO][WARN] {warning}", flush=True)
             if owner_restore_collapse_eval_streak >= 3:
                 warning = (
                     "phase0 owner head is active in raw action but collapsed by execution restore path: "
@@ -2922,14 +3080,14 @@ def run_training_loop(cfg, evaluation_fn=None, resume_path: Optional[Path] = Non
                     f"(streak={owner_restore_collapse_eval_streak})"
                 )
                 record.setdefault('warnings', []).append(warning)
-                print(f"[{np.datetime64('now')}] [SR-MAPPO][WARN] {warning}", flush=True)
+                print(f"[{_tw_timestamp()}] [SR-MAPPO][WARN] {warning}", flush=True)
             if bool(phase_a_power_runtime) and eval_phase_a_changed_ratio <= 1.0e-9:
                 warning = (
                     "Phase-A eMBB power runtime enabled but no nonzero Phase-A eMBB power changes "
                     f"were observed in {evaluation_kind} at iteration {iteration}."
                 )
                 record.setdefault('warnings', []).append(warning)
-                timestamp = np.datetime64('now')
+                timestamp = _tw_timestamp()
                 print(f"[{timestamp}] [SR-MAPPO][WARN] {warning}", flush=True)
             if eligible and reward_score > best_reward_score:
                 best_reward_score = reward_score
@@ -3504,7 +3662,7 @@ def run_training_loop(cfg, evaluation_fn=None, resume_path: Optional[Path] = Non
             latest_eval = record.get('evaluation')
             if latest_eval is None and best_reward_summary is not None:
                 latest_eval = best_reward_summary
-            timestamp = np.datetime64('now')
+            timestamp = _tw_timestamp()
             msg = (
                 f"[{timestamp}] [SR-MAPPO] episode {iteration}/{cfg.training.total_iterations} | "
                 f"target_load={chosen_load if chosen_load is not None else 'na'} | "
@@ -3573,6 +3731,50 @@ def run_training_loop(cfg, evaluation_fn=None, resume_path: Optional[Path] = Non
                 f" | owner_drop_churn={float(rollout_stats.get('owner_dropped_raw_churn_ratio', 0.0)):.3f}"
                 f" | owner_pos_cand={float(rollout_stats.get('phase0_owner_candidate_positive_objective_ratio', 0.0)):.3f}"
                 f" | owner_pos_acc={float(rollout_stats.get('phase0_owner_accepted_positive_objective_ratio', 0.0)):.3f}"
+                f" | owner_relax={float(rollout_stats.get('owner_candidate_relaxed_ratio', 0.0)):.3f}"
+                f" | owner_fb={float(rollout_stats.get('owner_candidate_fallback_used_ratio', 0.0)):.3f}"
+                f" | owner_obj(pre/post)={float(rollout_stats.get('owner_objective_gain_pre_filter_mean', 0.0)):.3f}/"
+                f"{float(rollout_stats.get('owner_objective_gain_post_filter_mean', 0.0)):.3f}"
+                f" | owner_obj(mu/std/thr)={float(rollout_stats.get('owner_obj_mean', 0.0)):.3f}/"
+                f"{float(rollout_stats.get('owner_obj_std', 0.0)):.3f}/"
+                f"{float(rollout_stats.get('owner_gate_threshold', 0.0)):.3f}"
+                f" | owner_after_gate={float(rollout_stats.get('owner_candidate_after_gate_ratio', 0.0)):.3f}"
+                f" | owner_neg_acc={float(rollout_stats.get('owner_negative_but_accepted_ratio', 0.0)):.3f}"
+                f" | owner_neg_acc_when_pos={float(rollout_stats.get('owner_neg_accepted_with_positive_candidate_ratio', 0.0)):.3f}"
+                f" | owner_neg_clip={float(rollout_stats.get('owner_neg_accept_clipped_ratio', 0.0)):.3f}"
+                f" | owner_neg_quota_rej={float(rollout_stats.get('owner_neg_rejected_by_quota_ratio', 0.0)):.3f}"
+                f" | owner_pos_sel={float(rollout_stats.get('owner_pos_selected_ratio', 0.0)):.3f}"
+                f" | owner_sel(pos/neg)={float(rollout_stats.get('owner_final_pos_selected_count', rollout_stats.get('owner_pos_selected_count', 0.0))):.2f}/"
+                f"{float(rollout_stats.get('owner_final_neg_selected_count', rollout_stats.get('owner_neg_selected_count', 0.0))):.2f}"
+                f" | owner_sel/allow={float(rollout_stats.get('owner_selected_count', 0.0)):.2f}/"
+                f"{float(rollout_stats.get('owner_allowed_k', 0.0)):.2f}"
+                f" | owner_final(sel/pos/neg/sr/keep)={float(rollout_stats.get('owner_final_selected_count', 0.0)):.2f}/"
+                f"{float(rollout_stats.get('owner_final_pos_selected_count', 0.0)):.2f}/"
+                f"{float(rollout_stats.get('owner_final_neg_selected_count', 0.0)):.2f}/"
+                f"{float(rollout_stats.get('owner_final_safe_relax_selected_count', 0.0)):.2f}/"
+                f"{float(rollout_stats.get('owner_final_keep_set_size', 0.0)):.2f}"
+                f" | owner_fill={float(rollout_stats.get('owner_selection_fill_ratio', 0.0)):.3f}"
+                f" | owner_pos_short={float(rollout_stats.get('owner_positive_shortage_ratio', 0.0)):.3f}"
+                f" | owner_neg_blk={float(rollout_stats.get('owner_negative_blocked_due_to_quota_ratio', 0.0)):.3f}"
+                f" | owner_safe_relax(used/cand/sel)={float(rollout_stats.get('owner_safe_relaxed_used_ratio', 0.0)):.3f}/"
+                f"{float(rollout_stats.get('owner_safe_relaxed_candidate_count', 0.0)):.2f}/"
+                f"{float(rollout_stats.get('owner_safe_relaxed_selected_count', 0.0)):.2f}"
+                f" | owner_safe_relax(obj/srv/intf)={float(rollout_stats.get('owner_safe_relaxed_avg_objective', 0.0)):.3f}/"
+                f"{float(rollout_stats.get('owner_safe_relaxed_service_delta_mean', 0.0)):.3f}/"
+                f"{float(rollout_stats.get('owner_safe_relaxed_intercell_delta_mean', 0.0)):.3f}"
+                f" | owner_obj_near0={float(rollout_stats.get('owner_near_zero_objective_ratio', 0.0)):.3f}"
+                f" | owner_pos_after_relax={float(rollout_stats.get('owner_positive_after_relax_ratio', 0.0)):.3f}"
+                f" | owner_safe_relax_off={float(rollout_stats.get('owner_safe_relax_off_ratio', rollout_stats.get('owner_safe_relax_disabled_ratio', 0.0))):.3f}"
+                f" | phaseA_pos={float(rollout_stats.get('phaseA_positive_ratio', 0.0)):.3f}"
+                f" | phaseA_zero={float(rollout_stats.get('phaseA_zero_action_ratio', 0.0)):.3f}"
+                f" | phaseA_delta(mu/p10/p50/p90)={float(rollout_stats.get('phaseA_delta_mean', 0.0)):.3f}/"
+                f"{float(rollout_stats.get('phaseA_delta_p10', 0.0)):.3f}/"
+                f"{float(rollout_stats.get('phaseA_delta_p50', 0.0)):.3f}/"
+                f"{float(rollout_stats.get('phaseA_delta_p90', 0.0)):.3f}"
+                f" | phaseA_lt-0.9={float(rollout_stats.get('phaseA_delta_lt_neg09_ratio', 0.0)):.3f}"
+                f" | phaseA_pen(l2/sat/svc)={float(rollout_stats.get('phaseA_power_reduction_l2_penalty', 0.0)):.3f}/"
+                f"{float(rollout_stats.get('phaseA_power_saturation_penalty', 0.0)):.3f}/"
+                f"{float(rollout_stats.get('embb_service_floor_hinge_penalty', 0.0)):.3f}"
                 f" | phaseA_eff_floor_pen={float(rollout_stats.get('reward_term_terminal_phase_a_effective_nonzero_floor_penalty', 0.0)):.3f}"
                 f" | phaseA_abs_exec={float(rollout_stats.get('phaseA_executed_abs_delta_mean', 0.0)):.3f}"
             )

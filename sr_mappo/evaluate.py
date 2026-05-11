@@ -1,11 +1,13 @@
 """Evaluation helpers for comparing SR-MAPPO against the original Greedy simulator baseline."""
 
 from copy import deepcopy
+from datetime import datetime
 import json
 import shutil
 from pathlib import Path
 from time import perf_counter
 from typing import Dict, List
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import torch
@@ -43,7 +45,7 @@ def _timing_enabled(cfg: SRMAPPOConfig) -> bool:
 def _eval_log(cfg: SRMAPPOConfig, message: str) -> None:
     if not _timing_enabled(cfg):
         return
-    timestamp = np.datetime64("now")
+    timestamp = datetime.now(ZoneInfo("Asia/Taipei")).isoformat(timespec="seconds")
     print(f"[{timestamp}] [SR-MAPPO][EVAL] {message}", flush=True)
 
 
@@ -332,6 +334,12 @@ def _empty_compare_summary(baseline_mode: str) -> Dict[str, float]:
         "loadwise_power_ratio_ceiling": [],
         "loadwise_power_ceiling_pass": [],
         "loadwise_power_ceiling_violation": [],
+        "loadwise_service_ratio_floor": [],
+        "loadwise_service_ratio_pass": [],
+        "loadwise_service_ratio_violation": [],
+        "loadwise_minrate_ratio_floor": [],
+        "loadwise_minrate_ratio_pass": [],
+        "loadwise_minrate_ratio_violation": [],
         "weighted_floor_violation": 0.0,
         "weighted_power_ceiling_violation": 0.0,
         "all_loads_pass_admission_floor": 1.0,
@@ -399,6 +407,22 @@ def _selection_reliability_floor(cfg: SRMAPPOConfig) -> float:
     return float(getattr(cfg.training, "selection_reliability_floor", 0.0) or 0.0)
 
 
+def _selection_service_ratio_floor_for_load(cfg: SRMAPPOConfig, load: float) -> float:
+    return _selection_value_for_load(
+        load,
+        getattr(cfg.training, "selection_service_ratio_floor_by_load", {}),
+        fallback=0.0,
+    )
+
+
+def _selection_minrate_ratio_floor_for_load(cfg: SRMAPPOConfig, load: float) -> float:
+    return _selection_value_for_load(
+        load,
+        getattr(cfg.training, "selection_minrate_ratio_floor_by_load", {}),
+        fallback=0.0,
+    )
+
+
 def _selection_value_for_load(load: float, mapping: Dict[float, float] | None, fallback: float) -> float:
     if not mapping:
         return float(fallback)
@@ -439,6 +463,8 @@ def _selection_constraint_metrics(
     policy_admission: float,
     policy_effective_urllc_success: float,
     rate_ratio: float,
+    service_ratio: float,
+    minrate_ratio: float,
     policy_overlay_count: float,
     policy_puncture_count: float,
     power_ratio: float,
@@ -447,6 +473,10 @@ def _selection_constraint_metrics(
     admission_violation = float(max(admission_floor - policy_admission, 0.0))
     throughput_ratio_floor = _selection_throughput_ratio_floor_for_load(cfg, actual_load)
     throughput_ratio_floor_violation = float(max(throughput_ratio_floor - rate_ratio, 0.0))
+    service_ratio_floor = _selection_service_ratio_floor_for_load(cfg, actual_load)
+    service_ratio_floor_violation = float(max(service_ratio_floor - service_ratio, 0.0))
+    minrate_ratio_floor = _selection_minrate_ratio_floor_for_load(cfg, actual_load)
+    minrate_ratio_floor_violation = float(max(minrate_ratio_floor - minrate_ratio, 0.0))
     reliability_floor = _selection_reliability_floor(cfg)
     policy_effective_urllc_success = float(
         0.0 if not np.isfinite(policy_effective_urllc_success) else policy_effective_urllc_success
@@ -466,6 +496,8 @@ def _selection_constraint_metrics(
     selection_side_violation = float(
         admission_violation
         + throughput_ratio_floor_violation
+        + service_ratio_floor_violation
+        + minrate_ratio_floor_violation
         + reliability_violation
         + puncture_floor_violation
         + overlay_ceiling_violation
@@ -480,10 +512,16 @@ def _selection_constraint_metrics(
     summary = {
         "selection_admission_floor": float(admission_floor),
         "selection_throughput_ratio_floor": float(throughput_ratio_floor),
+        "selection_service_ratio_floor": float(service_ratio_floor),
+        "selection_minrate_ratio_floor": float(minrate_ratio_floor),
         "selection_reliability_floor": float(reliability_floor),
         "selection_power_ratio_ceiling": float(power_ceiling),
         "floor_pass": float(selection_side_pass),
         "floor_violation": float(selection_side_violation),
+        "service_ratio_pass": float(service_ratio_floor_violation <= 1.0e-9),
+        "service_ratio_violation": float(service_ratio_floor_violation),
+        "minrate_ratio_pass": float(minrate_ratio_floor_violation <= 1.0e-9),
+        "minrate_ratio_violation": float(minrate_ratio_floor_violation),
         "power_ceiling_pass": float(power_ceiling_pass),
         "power_ceiling_violation": float(power_ceiling_violation),
     }
@@ -1844,6 +1882,11 @@ def _evaluate_one_load(env, model, cfg, target_load: float, seed_base: int) -> D
         policy_adm,
         policy_effective_success,
         rate_ratio,
+        (_mean(policy_metrics, 'embb_service_ratio') / max(_mean(greedy_metrics, 'embb_service_ratio'), 1.0e-9)),
+        (
+            _mean(policy_metrics, 'embb_min_rate_satisfaction_ratio')
+            / max(_mean(greedy_metrics, 'embb_min_rate_satisfaction_ratio'), 1.0e-9)
+        ),
         policy_overlay,
         policy_puncture,
         power_ratio,
@@ -2070,6 +2113,14 @@ def evaluate_against_greedy(env, model, cfg) -> Dict[str, float]:
                     policy_adm,
                     policy_effective_success,
                     rate_ratio,
+                    (
+                        _mean(policy_metrics, 'embb_service_ratio')
+                        / max(float(frozen.get('embb_service_ratio', 0.0)), 1.0e-9)
+                    ),
+                    (
+                        _mean(policy_metrics, 'embb_min_rate_satisfaction_ratio')
+                        / max(float(frozen.get('embb_min_rate_satisfaction_ratio', 0.0)), 1.0e-9)
+                    ),
                     policy_overlay,
                     policy_puncture,
                     power_ratio,
@@ -2177,6 +2228,8 @@ def evaluate_against_greedy(env, model, cfg) -> Dict[str, float]:
             dict(getattr(cfg.training, 'selection_admission_floor_by_load', {}) or {})
             or dict(getattr(cfg.training, 'selection_power_ratio_ceiling_by_load', {}) or {})
             or dict(getattr(cfg.training, 'selection_throughput_ratio_floor_by_load', {}) or {})
+            or dict(getattr(cfg.training, 'selection_service_ratio_floor_by_load', {}) or {})
+            or dict(getattr(cfg.training, 'selection_minrate_ratio_floor_by_load', {}) or {})
             or dict(getattr(cfg.training, 'selection_puncture_ratio_floor_by_load', {}) or {})
             or dict(getattr(cfg.training, 'selection_overlay_ratio_ceiling_by_load', {}) or {})
             or _selection_reliability_floor(cfg) > 0.0
@@ -2199,6 +2252,12 @@ def evaluate_against_greedy(env, model, cfg) -> Dict[str, float]:
             loadwise_power_ratio_ceiling = [float(item.get('selection_power_ratio_ceiling', float('inf'))) for item in per_load]
             loadwise_power_ceiling_pass = [float(item.get('power_ceiling_pass', 1.0)) for item in per_load]
             loadwise_power_ceiling_violation = [float(item.get('power_ceiling_violation', 0.0)) for item in per_load]
+            loadwise_service_ratio_floor = [float(item.get('selection_service_ratio_floor', 0.0)) for item in per_load]
+            loadwise_service_ratio_pass = [float(item.get('service_ratio_pass', 1.0)) for item in per_load]
+            loadwise_service_ratio_violation = [float(item.get('service_ratio_violation', 0.0)) for item in per_load]
+            loadwise_minrate_ratio_floor = [float(item.get('selection_minrate_ratio_floor', 0.0)) for item in per_load]
+            loadwise_minrate_ratio_pass = [float(item.get('minrate_ratio_pass', 1.0)) for item in per_load]
+            loadwise_minrate_ratio_violation = [float(item.get('minrate_ratio_violation', 0.0)) for item in per_load]
             weighted_floor_violation = float(np.sum([
                 load_aware_score_mix(item['actual_load'], low_damage=low_damage_objective) * float(item['floor_violation'])
                 for item in per_load
@@ -2209,6 +2268,8 @@ def evaluate_against_greedy(env, model, cfg) -> Dict[str, float]:
             ]))
             all_loads_pass_floor = float(np.mean(loadwise_floor_pass) >= 1.0 - 1e-9)
             all_loads_pass_power_ceiling = float(np.mean(loadwise_power_ceiling_pass) >= 1.0 - 1e-9)
+            all_loads_pass_service_ratio = float(np.mean(loadwise_service_ratio_pass) >= 1.0 - 1e-9)
+            all_loads_pass_minrate_ratio = float(np.mean(loadwise_minrate_ratio_pass) >= 1.0 - 1e-9)
         else:
             selection_score = (
                 3.0 * (mean_rate_ratio - 1.0)
@@ -2227,10 +2288,18 @@ def evaluate_against_greedy(env, model, cfg) -> Dict[str, float]:
             loadwise_power_ratio_ceiling = [float(item.get('selection_power_ratio_ceiling', float('inf'))) for item in per_load] if has_loadwise_constraints else []
             loadwise_power_ceiling_pass = [float(item.get('power_ceiling_pass', 1.0)) for item in per_load] if has_loadwise_constraints else []
             loadwise_power_ceiling_violation = [float(item.get('power_ceiling_violation', 0.0)) for item in per_load] if has_loadwise_constraints else []
+            loadwise_service_ratio_floor = [float(item.get('selection_service_ratio_floor', 0.0)) for item in per_load] if has_loadwise_constraints else []
+            loadwise_service_ratio_pass = [float(item.get('service_ratio_pass', 1.0)) for item in per_load] if has_loadwise_constraints else []
+            loadwise_service_ratio_violation = [float(item.get('service_ratio_violation', 0.0)) for item in per_load] if has_loadwise_constraints else []
+            loadwise_minrate_ratio_floor = [float(item.get('selection_minrate_ratio_floor', 0.0)) for item in per_load] if has_loadwise_constraints else []
+            loadwise_minrate_ratio_pass = [float(item.get('minrate_ratio_pass', 1.0)) for item in per_load] if has_loadwise_constraints else []
+            loadwise_minrate_ratio_violation = [float(item.get('minrate_ratio_violation', 0.0)) for item in per_load] if has_loadwise_constraints else []
             weighted_floor_violation = float(np.mean(loadwise_floor_violation)) if loadwise_floor_violation else 0.0
             weighted_power_ceiling_violation = float(np.mean(loadwise_power_ceiling_violation)) if loadwise_power_ceiling_violation else 0.0
             all_loads_pass_floor = float(np.mean(loadwise_floor_pass) >= 1.0 - 1e-9) if loadwise_floor_pass else 1.0
             all_loads_pass_power_ceiling = float(np.mean(loadwise_power_ceiling_pass) >= 1.0 - 1e-9) if loadwise_power_ceiling_pass else 1.0
+            all_loads_pass_service_ratio = float(np.mean(loadwise_service_ratio_pass) >= 1.0 - 1e-9) if loadwise_service_ratio_pass else 1.0
+            all_loads_pass_minrate_ratio = float(np.mean(loadwise_minrate_ratio_pass) >= 1.0 - 1e-9) if loadwise_minrate_ratio_pass else 1.0
         all_loads_pass_admission_floor = float(np.mean(admission_only_pass_by_load) >= 1.0 - 1e-9) if admission_only_pass_by_load else 1.0
 
         summary = {
@@ -2299,13 +2368,23 @@ def evaluate_against_greedy(env, model, cfg) -> Dict[str, float]:
             'loadwise_power_ratio_ceiling': loadwise_power_ratio_ceiling,
             'loadwise_power_ceiling_pass': loadwise_power_ceiling_pass,
             'loadwise_power_ceiling_violation': loadwise_power_ceiling_violation,
+            'loadwise_service_ratio_floor': loadwise_service_ratio_floor,
+            'loadwise_service_ratio_pass': loadwise_service_ratio_pass,
+            'loadwise_service_ratio_violation': loadwise_service_ratio_violation,
+            'loadwise_minrate_ratio_floor': loadwise_minrate_ratio_floor,
+            'loadwise_minrate_ratio_pass': loadwise_minrate_ratio_pass,
+            'loadwise_minrate_ratio_violation': loadwise_minrate_ratio_violation,
             'weighted_floor_violation': weighted_floor_violation,
             'weighted_power_ceiling_violation': weighted_power_ceiling_violation,
             'all_loads_pass_admission_floor': all_loads_pass_admission_floor,
             'all_loads_pass_power_ceiling': all_loads_pass_power_ceiling,
+            'all_loads_pass_service_ratio_floor': all_loads_pass_service_ratio,
+            'all_loads_pass_minrate_ratio_floor': all_loads_pass_minrate_ratio,
             'all_loads_pass_selection_constraints': float(
                 all_loads_pass_floor >= 1.0 - 1e-9
                 and all_loads_pass_power_ceiling >= 1.0 - 1e-9
+                and all_loads_pass_service_ratio >= 1.0 - 1e-9
+                and all_loads_pass_minrate_ratio >= 1.0 - 1e-9
             ),
             'greedy_score': 0.0,
             'score_margin': float(selection_score),

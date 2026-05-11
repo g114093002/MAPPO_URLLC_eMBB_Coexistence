@@ -58,6 +58,13 @@ class CandidatePacket:
     cause_cross_uav_interference_too_high: bool = False
     cause_deadline_or_release_violation: bool = False
     cause_other_structural_reason: bool = False
+    # Decomposition of `cause_other_structural_reason` for report-side root-cause analysis.
+    cause_gain_ratio_unqualified: bool = False
+    cause_overlay_margin_blocked: bool = False
+    cause_overlay_positive_gate_blocked: bool = False
+    cause_no_overlay_owner_available: bool = False
+    cause_overlay_reliability_failed: bool = False
+    cause_overlay_sic_failed: bool = False
     feasible_uav_count: int = 1
     overlay_uav_count: int = 0
     puncture_uav_count: int = 0

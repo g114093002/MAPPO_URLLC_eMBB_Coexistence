@@ -32,6 +32,27 @@ EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V6_PUNCTURE_ACCOU
 EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V7_OWNER_UNFROZEN_DEBUG = "phase0_joint_full_power_service_interference_repair_v7_owner_unfrozen_debug"
 EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V71_OWNER_OBJECTIVE_GATE_DEBUG = "phase0_joint_full_power_service_interference_repair_v7_1_owner_objective_gate_debug"
 EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V72_OWNER_OBJECTIVE_GATE_CHURN_PHASEA_FLOOR_DEBUG = "phase0_joint_full_power_service_interference_repair_v7_2_owner_objective_gate_churn_phasea_floor_debug"
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V73_OWNER_ADAPTIVE_GATE_DEBUG = "phase0_joint_full_power_service_interference_repair_v7_3_owner_adaptive_gate_debug"
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V74_OWNER_NEGATIVE_QUOTA_DEBUG = "phase0_joint_full_power_service_interference_repair_v7_4_owner_negative_quota_debug"
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_PHASEA_ANTISATURATION_DEBUG = "phase0_joint_full_power_service_interference_repair_v8_phasea_antisaturation_debug"
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_SHARE10_DEBUG = "phase0_joint_full_power_service_interference_repair_v8_greedy_share10_debug"
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX37_DEBUG = "phase0_joint_full_power_service_interference_repair_v8_greedy_mix37_debug"
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX55_DEBUG = "phase0_joint_full_power_service_interference_repair_v8_greedy_mix55_debug"
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX73_DEBUG = "phase0_joint_full_power_service_interference_repair_v8_greedy_mix73_debug"
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX010_DEBUG = "phase0_joint_full_power_service_interference_repair_v8_greedy_mix010_debug"
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX100_DEBUG = "phase0_joint_full_power_service_interference_repair_v8_greedy_mix100_debug"
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_SHARE20_DEBUG = "phase0_joint_full_power_service_interference_repair_v8_greedy_share20_debug"
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_SHARE30_DEBUG = "phase0_joint_full_power_service_interference_repair_v8_greedy_share30_debug"
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1 = "phase0_joint_full_power_service_interference_repair_v8_mappo_mix73_dominance_v1"
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_1_TARGETED_PATCH = "phase0_joint_full_power_service_interference_repair_v8_mappo_mix73_dominance_v1_1_targeted_patch"
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_2_ADMISSION_PUSH = "phase0_joint_full_power_service_interference_repair_v8_mappo_mix73_dominance_v1_2_admission_push"
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_3_ADMISSION_SERVICE_POWER_FIRST = "phase0_joint_full_power_service_interference_repair_v8_mappo_mix73_dominance_v1_3_admission_service_power_first"
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_4_INTERCELL_GUARD_ADMISSION_REBALANCE = "phase0_joint_full_power_service_interference_repair_v8_mappo_mix73_dominance_v1_4_intercell_guard_admission_rebalance"
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_5_INTERCELL_GUARD_OWNER_UNFREEZE = "phase0_joint_full_power_service_interference_repair_v8_mappo_mix73_dominance_v1_5_intercell_guard_owner_unfreeze"
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_6_INTERCELL_GUARD_OWNER_EFFECTIVE = "phase0_joint_full_power_service_interference_repair_v8_mappo_mix73_dominance_v1_6_intercell_guard_owner_effective"
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_7_OWNER_BUDGET_ADMISSION_STABLE = "phase0_joint_full_power_service_interference_repair_v8_mappo_mix73_dominance_v1_7_owner_budget_admission_stable"
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V2_WARMUP = "phase0_joint_full_power_service_interference_repair_v8_mappo_mix73_dominance_v2_warmup"
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V3_ACTION_REWARD_ALIGNED = "phase0_joint_full_power_service_interference_repair_v8_mappo_mix73_dominance_v3_action_reward_aligned"
 EXPERIMENT_FAIR = "fair_fixed_baseline"
 EXPERIMENT_FULL = "full_joint_learning"
 EXPERIMENT_FULL_THROUGHPUT = "throughput_oriented_full_joint"
@@ -118,6 +139,27 @@ EXPERIMENT_CHOICES = [
     EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V7_OWNER_UNFROZEN_DEBUG,
     EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V71_OWNER_OBJECTIVE_GATE_DEBUG,
     EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V72_OWNER_OBJECTIVE_GATE_CHURN_PHASEA_FLOOR_DEBUG,
+    EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V73_OWNER_ADAPTIVE_GATE_DEBUG,
+    EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V74_OWNER_NEGATIVE_QUOTA_DEBUG,
+    EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_PHASEA_ANTISATURATION_DEBUG,
+    EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_SHARE10_DEBUG,
+    EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX37_DEBUG,
+    EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX55_DEBUG,
+    EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX73_DEBUG,
+    EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX010_DEBUG,
+    EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX100_DEBUG,
+    EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_SHARE20_DEBUG,
+    EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_SHARE30_DEBUG,
+    EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1,
+    EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_1_TARGETED_PATCH,
+    EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_2_ADMISSION_PUSH,
+    EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_3_ADMISSION_SERVICE_POWER_FIRST,
+    EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_4_INTERCELL_GUARD_ADMISSION_REBALANCE,
+    EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_5_INTERCELL_GUARD_OWNER_UNFREEZE,
+    EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_6_INTERCELL_GUARD_OWNER_EFFECTIVE,
+    EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_7_OWNER_BUDGET_ADMISSION_STABLE,
+    EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V2_WARMUP,
+    EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V3_ACTION_REWARD_ALIGNED,
     EXPERIMENT_FAIR,
     EXPERIMENT_FULL,
     EXPERIMENT_FULL_THROUGHPUT,
@@ -357,6 +399,26 @@ def normalize_experiment_line(line: str | None) -> str:
         "pure_ppo_ff_v1": EXPERIMENT_PURE_PPO_FF_V1,
         "phasea_pure_ffppo_v1": EXPERIMENT_PURE_PPO_FF_V1,
         "pure_ffppo_v1": EXPERIMENT_PURE_PPO_FF_V1,
+        "mix73_dominance_v1": EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1,
+        "mappo_mix73_dominance_v1": EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1,
+        "mix73_dominance_v1_1": EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_1_TARGETED_PATCH,
+        "mappo_mix73_dominance_v1_1": EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_1_TARGETED_PATCH,
+        "mix73_dominance_v1_2": EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_2_ADMISSION_PUSH,
+        "mappo_mix73_dominance_v1_2": EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_2_ADMISSION_PUSH,
+        "mix73_dominance_v1_3": EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_3_ADMISSION_SERVICE_POWER_FIRST,
+        "mappo_mix73_dominance_v1_3": EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_3_ADMISSION_SERVICE_POWER_FIRST,
+        "mix73_dominance_v1_4": EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_4_INTERCELL_GUARD_ADMISSION_REBALANCE,
+        "mappo_mix73_dominance_v1_4": EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_4_INTERCELL_GUARD_ADMISSION_REBALANCE,
+        "mix73_dominance_v1_5": EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_5_INTERCELL_GUARD_OWNER_UNFREEZE,
+        "mappo_mix73_dominance_v1_5": EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_5_INTERCELL_GUARD_OWNER_UNFREEZE,
+        "mix73_dominance_v1_6": EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_6_INTERCELL_GUARD_OWNER_EFFECTIVE,
+        "mappo_mix73_dominance_v1_6": EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_6_INTERCELL_GUARD_OWNER_EFFECTIVE,
+        "mix73_dominance_v1_7": EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_7_OWNER_BUDGET_ADMISSION_STABLE,
+        "mappo_mix73_dominance_v1_7": EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_7_OWNER_BUDGET_ADMISSION_STABLE,
+        "mix73_dominance_v2": EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V2_WARMUP,
+        "mappo_mix73_dominance_v2": EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V2_WARMUP,
+        "mix73_dominance_v3": EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V3_ACTION_REWARD_ALIGNED,
+        "mappo_mix73_dominance_v3": EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V3_ACTION_REWARD_ALIGNED,
         "noshield_min_safe": EXPERIMENT_NO_SHIELD_MIN_SAFE,
         "no_shield_min_safe": EXPERIMENT_NO_SHIELD_MIN_SAFE,
         "noshield_raw": EXPERIMENT_NO_SHIELD_RAW,
@@ -393,6 +455,27 @@ def experiment_label(line: str | None) -> str:
         EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V7_OWNER_UNFROZEN_DEBUG: "Phase-0 Joint Full-Power Service+Interference Repair v7 Owner Unfrozen Debug",
 EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V71_OWNER_OBJECTIVE_GATE_DEBUG: "Phase-0 Joint Full-Power Service+Interference Repair v7.1 Owner Objective Gate Debug",
 EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V72_OWNER_OBJECTIVE_GATE_CHURN_PHASEA_FLOOR_DEBUG: "Phase-0 Joint Full-Power Service+Interference Repair v7.2 Owner Objective+Churn+PhaseA Floor Debug",
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V73_OWNER_ADAPTIVE_GATE_DEBUG: "Phase-0 Joint Full-Power Service+Interference Repair v7.3 Owner Adaptive Gate Debug",
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V74_OWNER_NEGATIVE_QUOTA_DEBUG: "Phase-0 Joint Full-Power Service+Interference Repair v7.4 Owner Negative Quota Debug",
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_PHASEA_ANTISATURATION_DEBUG: "Phase-0 Joint Full-Power Service+Interference Repair v8 Phase-A Anti-saturation Debug",
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_SHARE10_DEBUG: "Phase-0 Joint Full-Power Service+Interference Repair v8 Greedy URLLC Share 10% Debug",
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX37_DEBUG: "Phase-0 Joint Full-Power Service+Interference Repair v8 Greedy Mix eMBB:URLLC=3:7 Debug",
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX55_DEBUG: "Phase-0 Joint Full-Power Service+Interference Repair v8 Greedy Mix eMBB:URLLC=5:5 Debug",
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX73_DEBUG: "Phase-0 Joint Full-Power Service+Interference Repair v8 Greedy Mix eMBB:URLLC=7:3 Debug",
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX010_DEBUG: "Phase-0 Joint Full-Power Service+Interference Repair v8 Greedy Mix eMBB:URLLC=0:10 Debug",
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX100_DEBUG: "Phase-0 Joint Full-Power Service+Interference Repair v8 Greedy Mix eMBB:URLLC=10:0 Debug",
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_SHARE20_DEBUG: "Phase-0 Joint Full-Power Service+Interference Repair v8 Greedy URLLC Share 20% Debug",
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_SHARE30_DEBUG: "Phase-0 Joint Full-Power Service+Interference Repair v8 Greedy URLLC Share 30% Debug",
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1: "Phase-0 Joint Full-Power v8 MAPPO Mix 7:3 Dominance-Constraint v1",
+    EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_1_TARGETED_PATCH: "Phase-0 Joint Full-Power v8 MAPPO Mix 7:3 Dominance-Constraint v1.1 Targeted Patch",
+    EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_2_ADMISSION_PUSH: "Phase-0 Joint Full-Power v8 MAPPO Mix 7:3 Dominance-Constraint v1.2 Admission Push",
+    EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_3_ADMISSION_SERVICE_POWER_FIRST: "Phase-0 Joint Full-Power v8 MAPPO Mix 7:3 Dominance-Constraint v1.3 Admission-Service-Power First",
+    EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_4_INTERCELL_GUARD_ADMISSION_REBALANCE: "Phase-0 Joint Full-Power v8 MAPPO Mix 7:3 Dominance-Constraint v1.4 Intercell-Guard Admission-Rebalance",
+    EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_5_INTERCELL_GUARD_OWNER_UNFREEZE: "Phase-0 Joint Full-Power v8 MAPPO Mix 7:3 Dominance-Constraint v1.5 Intercell-Guard Owner-Unfreeze",
+    EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_6_INTERCELL_GUARD_OWNER_EFFECTIVE: "Phase-0 Joint Full-Power v8 MAPPO Mix 7:3 Dominance-Constraint v1.6 Intercell-Guard Owner-Effective",
+    EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_7_OWNER_BUDGET_ADMISSION_STABLE: "Phase-0 Joint Full-Power v8 MAPPO Mix 7:3 Dominance-Constraint v1.7 Owner-Budget + Admission-Stable",
+    EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V2_WARMUP: "Phase-0 Joint Full-Power v8 MAPPO Mix 7:3 Dominance-Constraint v2 Warmup",
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V3_ACTION_REWARD_ALIGNED: "Phase-0 Joint Full-Power v8 MAPPO Mix 7:3 Dominance-Constraint v3 Action+Reward Aligned",
         EXPERIMENT_PHASE0_JOINT_OWNER_POWER_DECOUPLED: "Phase-0 Joint Owner+Power (Decoupled Rewards, No Shield, Myopic Baseline)",
         EXPERIMENT_PHASE0_OWNER_EFFECTIVE_SEPARATION_DEBUG: "Owner-First Separation Debug (No Phase-A Power, No Restore-to-Snapshot Fallback)",
         EXPERIMENT_PHASE0_OWNER_FORCED_CHANGE_NO_NULL_DEBUG: "Owner Forced-Change No-Null Debug (Global Owner IDs, No Phase-A Power, Myopic Baseline)",
@@ -1288,6 +1371,515 @@ def apply_experiment_preset(cfg: SRMAPPOConfig, line: str | None) -> SRMAPPOConf
         updated.reward.terminal_phase_a_effective_nonzero_floor = 0.15
         updated.reward.terminal_phase_a_abs_delta_floor_penalty_weight = 0.06
         updated.reward.terminal_phase_a_abs_delta_floor = 0.04
+        return updated
+
+    if normalized == EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V73_OWNER_ADAPTIVE_GATE_DEBUG:
+        # v7.3: inherit v7.2 and use adaptive owner gate diagnostics/tuning.
+        updated = apply_experiment_preset(updated, EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V72_OWNER_OBJECTIVE_GATE_CHURN_PHASEA_FLOOR_DEBUG)
+        updated.training.experiment_line = normalized
+        updated.training.run_name = "sr_mappo_phase0_joint_full_power_service_interference_repair_v7_3_owner_adaptive_gate_debug"
+        updated.env.owner_objective_adaptive_k = 0.7
+        return updated
+
+    if normalized == EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V74_OWNER_NEGATIVE_QUOTA_DEBUG:
+        # v7.4: inherit v7.3 adaptive gate and cap accepted negative-objective owner changes.
+        updated = apply_experiment_preset(updated, EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V73_OWNER_ADAPTIVE_GATE_DEBUG)
+        updated.training.experiment_line = normalized
+        updated.training.run_name = "sr_mappo_phase0_joint_full_power_service_interference_repair_v7_4_owner_negative_quota_debug"
+        updated.env.owner_max_negative_accept_ratio = 0.30
+        return updated
+
+    if normalized == EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_PHASEA_ANTISATURATION_DEBUG:
+        # v8: keep v7.4 owner behavior; add only Phase-A anti-saturation reward shaping.
+        updated = apply_experiment_preset(updated, EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V74_OWNER_NEGATIVE_QUOTA_DEBUG)
+        updated.training.experiment_line = normalized
+        updated.training.run_name = "sr_mappo_phase0_joint_full_power_service_interference_repair_v8_phasea_antisaturation_debug"
+        updated.reward.phase_a_power_reduction_l2_penalty_weight = 0.025
+        updated.reward.phase_a_power_saturation_penalty_weight = 0.05
+        updated.reward.phase_a_power_saturation_threshold = 0.9
+        updated.reward.embb_service_floor_hinge_penalty_weight = 0.20
+        updated.reward.embb_service_floor_target = 0.55
+        return updated
+
+    if normalized == EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_SHARE10_DEBUG:
+        updated = apply_experiment_preset(updated, EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_PHASEA_ANTISATURATION_DEBUG)
+        updated.training.experiment_line = normalized
+        updated.training.run_name = "sr_mappo_phase0_joint_full_power_service_interference_repair_v8_greedy_share10_debug"
+        updated.training.train_seed = 20260501
+        updated.env.greedy_urllc_share_mode = "fixed_share"
+        updated.env.greedy_urllc_share_ratio = 0.10
+        updated.env.urllc_user_ratio_override = 0.0
+        updated.env.urllc_poisson_rate_is_per_user = True
+        # Report-side greedy ablation: randomize topology/channel across episodes
+        # so the mean over episodes reflects scenario uncertainty.
+        updated.env.freeze_association_across_episodes = False
+        updated.env.freeze_channel_gains_across_episodes = False
+        return updated
+
+    if normalized == EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX37_DEBUG:
+        updated = apply_experiment_preset(updated, EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_PHASEA_ANTISATURATION_DEBUG)
+        updated.training.experiment_line = normalized
+        updated.training.run_name = "sr_mappo_phase0_joint_full_power_service_interference_repair_v8_greedy_mix37_debug"
+        updated.training.train_seed = 20260501
+        updated.training.enable_timing_logs = True
+        updated.env.greedy_urllc_share_mode = "fixed_share"
+        updated.env.greedy_urllc_share_ratio = 0.10
+        # User composition override for report/compare density scenario: eMBB:URLLC = 3:7.
+        updated.env.urllc_user_ratio_override = 0.70
+        updated.env.urllc_poisson_rate_is_per_user = False
+        updated.env.urllc_poisson_rate = 25.6
+        updated.env.fixed_urllc_poisson_rate = False
+        updated.env.freeze_association_across_episodes = False
+        updated.env.freeze_channel_gains_across_episodes = False
+        # Candidate-supply diagnosis knobs: keep URLLC packets visible after release
+        # and allow all UAVs to evaluate each packet as a candidate server.
+        updated.env.allow_packet_carryover_across_minislots = True
+        updated.env.use_all_uavs_as_candidate_servers = True
+        updated.env.greedy_hf_relax_prefilter_mask = True
+        # Relax hard-feasible greedy admission gates for report-side diagnosis:
+        # default min_noma_gain_ratio=1.05, embb_min_sic_snir_db=2.0 are too strict under high URLLC density.
+        updated.env.greedy_hf_min_noma_gain_ratio_override = 0.95
+        updated.env.greedy_hf_embb_min_sic_snir_db_override = -2.0
+        return updated
+
+    if normalized == EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX55_DEBUG:
+        updated = apply_experiment_preset(updated, EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_PHASEA_ANTISATURATION_DEBUG)
+        updated.training.experiment_line = normalized
+        updated.training.run_name = "sr_mappo_phase0_joint_full_power_service_interference_repair_v8_greedy_mix55_debug"
+        updated.training.train_seed = 20260501
+        updated.training.enable_timing_logs = True
+        updated.env.greedy_urllc_share_mode = "fixed_share"
+        updated.env.greedy_urllc_share_ratio = 0.10
+        # User composition override for report/compare density scenario: eMBB:URLLC = 5:5.
+        updated.env.urllc_user_ratio_override = 0.50
+        updated.env.urllc_poisson_rate_is_per_user = False
+        updated.env.urllc_poisson_rate = 25.6
+        updated.env.fixed_urllc_poisson_rate = False
+        updated.env.freeze_association_across_episodes = False
+        updated.env.freeze_channel_gains_across_episodes = False
+        # Candidate-supply knobs: increase pre-admission candidate availability
+        # without loosening final reliability/SIC/power feasibility checks.
+        updated.env.allow_packet_carryover_across_minislots = True
+        updated.env.greedy_hf_relax_prefilter_mask = True
+        # Keep diagnostic feasibility gate overrides aligned with mix37 runs.
+        updated.env.greedy_hf_min_noma_gain_ratio_override = 0.95
+        updated.env.greedy_hf_embb_min_sic_snir_db_override = -2.0
+        return updated
+
+    if normalized == EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX73_DEBUG:
+        updated = apply_experiment_preset(updated, EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_PHASEA_ANTISATURATION_DEBUG)
+        updated.training.experiment_line = normalized
+        updated.training.run_name = "sr_mappo_phase0_joint_full_power_service_interference_repair_v8_greedy_mix73_debug"
+        updated.training.train_seed = 20260501
+        updated.training.enable_timing_logs = True
+        updated.env.greedy_urllc_share_mode = "fixed_share"
+        updated.env.greedy_urllc_share_ratio = 0.10
+        # User composition override for report/compare density scenario: eMBB:URLLC = 7:3.
+        updated.env.urllc_user_ratio_override = 0.30
+        updated.env.urllc_poisson_rate_is_per_user = False
+        updated.env.urllc_poisson_rate = 25.6
+        updated.env.fixed_urllc_poisson_rate = False
+        updated.env.freeze_association_across_episodes = False
+        updated.env.freeze_channel_gains_across_episodes = False
+        # Candidate-supply knobs: increase pre-admission candidate availability
+        # without loosening final reliability/SIC/power feasibility checks.
+        updated.env.allow_packet_carryover_across_minislots = True
+        updated.env.greedy_hf_relax_prefilter_mask = True
+        # Keep diagnostic feasibility gate overrides aligned with mix37 runs.
+        updated.env.greedy_hf_min_noma_gain_ratio_override = 0.95
+        updated.env.greedy_hf_embb_min_sic_snir_db_override = -2.0
+        return updated
+
+    if normalized == EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1:
+        # Dominance-constrained MAPPO for mix 7:3.
+        # Target:
+        # - eMBB throughput >= 97% of baseline greedy
+        # - URLLC admission >= 120% of baseline greedy
+        # - URLLC reliability >= baseline greedy
+        # - eMBB service/min-rate >= 120% of baseline greedy
+        updated = apply_experiment_preset(updated, EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_PHASEA_ANTISATURATION_DEBUG)
+        updated.training.experiment_line = normalized
+        updated.training.run_name = "sr_mappo_phase0_joint_full_power_service_interference_repair_v8_mappo_mix73_dominance_v1"
+        updated.training.train_seed = 20260504
+        updated.training.enable_timing_logs = True
+
+        # Evaluate MAPPO only against the exact greedy baseline user cares about.
+        updated.training.greedy_baseline_mode = "hard_feasible_throughput_greedy"
+        updated.training.selection_baseline_mode = "hard_feasible_throughput_greedy"
+        updated.training.eval_compare_modes = ["selected"]
+
+        # Keep report/training scenario aligned with current mix 7:3 setup.
+        updated.env.urllc_user_ratio_override = 0.30
+        updated.env.urllc_poisson_rate_is_per_user = False
+        updated.env.urllc_poisson_rate = 25.6
+        updated.env.fixed_urllc_poisson_rate = False
+        updated.env.freeze_association_across_episodes = False
+        updated.env.freeze_channel_gains_across_episodes = False
+
+        # Hard selection constraints: fail if any load violates.
+        common_loads = {9.0: 1.0, 12.0: 1.0, 15.0: 1.0, 18.0: 1.0, 21.0: 1.0, 24.0: 1.0}
+        updated.training.selection_score_weights_by_load = dict(common_loads)
+        updated.training.selection_throughput_ratio_floor_by_load = {k: 0.97 for k in common_loads}
+        updated.training.selection_admission_floor_ratio_to_baseline = 1.20
+        updated.training.selection_reliability_floor = 0.999
+        updated.training.selection_service_ratio_floor_by_load = {k: 1.20 for k in common_loads}
+        updated.training.selection_minrate_ratio_floor_by_load = {k: 1.20 for k in common_loads}
+
+        # Checkpoint eval scope should cover all loads so dominance is global.
+        updated.training.checkpoint_eval_scope = "all_loads"
+        updated.training.checkpoint_eval_loads = [9.0, 12.0, 15.0, 18.0, 21.0, 24.0]
+        updated.training.checkpoint_eval_episodes_per_load = 4
+        updated.training.light_eval_every = 50
+        updated.training.light_eval_loads = [9.0, 12.0, 15.0, 18.0, 21.0, 24.0]
+        updated.training.light_eval_episodes_per_load = 4
+        updated.training.full_eval_enabled_during_training = False
+        return updated
+
+    if normalized == EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_1_TARGETED_PATCH:
+        # v1.1 targeted patch: keep v1 structure; relax only the key bottlenecks.
+        updated = apply_experiment_preset(updated, EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1)
+        updated.training.experiment_line = normalized
+        updated.training.run_name = "sr_mappo_phase0_joint_full_power_service_interference_repair_v8_mappo_mix73_dominance_v1_1_targeted_patch"
+
+        # 1) Relax dominance floors from 1.20 -> 1.10.
+        common_loads = {9.0: 1.0, 12.0: 1.0, 15.0: 1.0, 18.0: 1.0, 21.0: 1.0, 24.0: 1.0}
+        updated.training.selection_score_weights_by_load = dict(common_loads)
+        updated.training.selection_throughput_ratio_floor_by_load = {k: 0.97 for k in common_loads}
+        updated.training.selection_admission_floor_ratio_to_baseline = 1.10
+        updated.training.selection_reliability_floor = 0.999
+        updated.training.selection_service_ratio_floor_by_load = {k: 1.10 for k in common_loads}
+        updated.training.selection_minrate_ratio_floor_by_load = {k: 1.10 for k in common_loads}
+
+        # 2) Lower phase-A anchor weight to reduce action suppression.
+        updated.training.phase_a_embb_power_anchor_weight = 0.10
+
+        # 3) Raise owner negative accept ratio to keep more useful edits alive.
+        updated.env.owner_max_negative_accept_ratio = 0.60
+        return updated
+
+    if normalized == EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_2_ADMISSION_PUSH:
+        # v1.2: keep v1.1 behavior, then explicitly push admission to catch/beat greedy.
+        updated = apply_experiment_preset(
+            updated,
+            EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_1_TARGETED_PATCH,
+        )
+        updated.training.experiment_line = normalized
+        updated.training.run_name = "sr_mappo_phase0_joint_full_power_service_interference_repair_v8_mappo_mix73_dominance_v1_2_admission_push"
+
+        common_loads = {5.0: 1.0, 10.0: 1.0, 15.0: 1.0, 20.0: 1.0, 25.0: 1.0}
+        updated.training.selection_score_weights_by_load = dict(common_loads)
+        updated.training.selection_admission_floor_ratio_to_baseline = 1.15
+        # Keep service/min-rate floors unchanged from v1.1.
+        updated.training.selection_service_ratio_floor_by_load = {k: 1.10 for k in common_loads}
+        updated.training.selection_minrate_ratio_floor_by_load = {k: 1.10 for k in common_loads}
+
+        # Terminal admission soft floor to discourage under-admitting while preserving reliability.
+        updated.reward.terminal_admission_floor_soft_penalty_weight = 2.0
+        updated.reward.terminal_admission_floor_soft_penalty_floor = 0.16
+        return updated
+
+    if normalized == EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_3_ADMISSION_SERVICE_POWER_FIRST:
+        # v1.3: admission/service/power first, throughput as tie-breaker.
+        updated = apply_experiment_preset(
+            updated,
+            EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_2_ADMISSION_PUSH,
+        )
+        updated.training.experiment_line = normalized
+        updated.training.run_name = "sr_mappo_phase0_joint_full_power_service_interference_repair_v8_mappo_mix73_dominance_v1_3_admission_service_power_first"
+
+        common_loads = {5.0: 1.0, 10.0: 1.0, 15.0: 1.0, 20.0: 1.0, 25.0: 1.0}
+        updated.training.selection_score_weights_by_load = dict(common_loads)
+
+        # Reliability-first policy:
+        # admission can drop, but reliability must stay near target.
+        updated.training.selection_admission_floor_ratio_to_baseline = 0.0
+        updated.training.selection_reliability_floor = 0.99999
+        # Secondary target: service/min-rate should clearly exceed greedy.
+        updated.training.selection_service_ratio_floor_by_load = {k: 1.15 for k in common_loads}
+        updated.training.selection_minrate_ratio_floor_by_load = {k: 1.15 for k in common_loads}
+        # Throughput can be slightly lower than greedy.
+        updated.training.selection_throughput_ratio_floor_by_load = {k: 0.97 for k in common_loads}
+        # Power should be better (policy power <= 95% of greedy).
+        updated.training.selection_power_ratio_ceiling_by_load = {k: 0.95 for k in common_loads}
+
+        # Enforce reliability-aware action sanitation.
+        updated.shield.enable_feasibility_shield = True
+        updated.shield.apply_joint_reliability_rewrite = True
+
+        # Remove explicit admission push; reliability has higher priority.
+        updated.reward.terminal_admission_floor_soft_penalty_weight = 0.0
+        updated.reward.terminal_admission_floor_soft_penalty_floor = 0.0
+        updated.reward.terminal_urllc_reliability_floor = 0.99999
+        updated.reward.terminal_urllc_reliability_shortfall_penalty_weight = 2000.0
+        updated.reward.terminal_urllc_reliability_hard_violation_penalty = 100.0
+        updated.reward.terminal_embb_service_floor = 0.24
+        updated.reward.terminal_embb_service_floor_penalty_weight = 2.0
+        updated.reward.terminal_embb_min_rate_floor = 0.16
+        updated.reward.terminal_embb_min_rate_floor_penalty_weight = 1.5
+        updated.reward.terminal_power_ratio_penalty_weight = 0.8
+        # Intercell suppression: do not trade reliability/admission for excessive intercell damage.
+        updated.env.enable_action_intercell_guard = True
+        updated.env.action_intercell_guard_ratio_to_running_min = None
+        updated.env.action_intercell_guard_ratio_to_local_min = 1.10
+        updated.env.action_intercell_guard_keep_best_feasible = True
+        updated.env.good_overlay_intercell_ratio_to_local_min = 1.20
+        updated.reward.step_action_intercell_penalty_weight = 1.20
+        updated.reward.step_action_intercell_penalty_normalizer = 1.0e-10
+        updated.reward.step_intercell_outgoing_delta_penalty_weight = 2.50
+        updated.reward.terminal_intercell_rate_loss_ratio_penalty_weight = 12.0
+        updated.reward.terminal_intercell_power_penalty_weight = 6.0
+        updated.reward.terminal_puncture_intercell_penalty_weight = 3.0
+        updated.reward.terminal_overlay_intercell_penalty_weight = 1.0
+        updated.reward.terminal_intercell_penalty_normalizer = 1.0e-7
+        updated.reward.high_intercell_admission_penalty_weight = 0.35
+        updated.reward.high_intercell_admission_budget_ema_beta = 0.95
+        return updated
+
+    if normalized == EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_4_INTERCELL_GUARD_ADMISSION_REBALANCE:
+        # v1.4: version bump from v1.3 for traceability (same behavior for now).
+        updated = apply_experiment_preset(
+            updated,
+            EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_3_ADMISSION_SERVICE_POWER_FIRST,
+        )
+        updated.training.experiment_line = normalized
+        updated.training.run_name = "sr_mappo_phase0_joint_full_power_service_interference_repair_v8_mappo_mix73_dominance_v1_4_intercell_guard_admission_rebalance"
+        return updated
+
+    if normalized == EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_5_INTERCELL_GUARD_OWNER_UNFREEZE:
+        # v1.5: keep v1.4 reliability/intercell direction, but reduce owner over-freeze so MAPPO can separate from greedy.
+        updated = apply_experiment_preset(
+            updated,
+            EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_4_INTERCELL_GUARD_ADMISSION_REBALANCE,
+        )
+        updated.training.experiment_line = normalized
+        updated.training.run_name = "sr_mappo_phase0_joint_full_power_service_interference_repair_v8_mappo_mix73_dominance_v1_5_intercell_guard_owner_unfreeze"
+
+        # Owner execution: allow more effective non-snapshot changes to escape snapshot lock-in.
+        updated.env.phase0_owner_max_change_ratio = 0.22
+        updated.env.owner_max_negative_accept_ratio = 0.55
+        updated.reward.owner_harmful_change_penalty_weight = 0.08
+        updated.reward.owner_dropped_raw_churn_penalty_weight = 0.015
+
+        # Phase-A still active but less anchor-clamped, so executed decisions can move.
+        updated.training.phase_a_embb_power_anchor_weight = 0.20
+
+        # Keep reliability hard, and allow admission tradeoff only after reliability is protected.
+        updated.training.selection_reliability_floor = 0.99995
+        updated.training.selection_admission_floor_ratio_to_baseline = 0.88
+
+        # Preserve strong intercell suppression.
+        updated.env.enable_action_intercell_guard = True
+        updated.env.action_intercell_guard_ratio_to_local_min = 1.10
+        updated.env.action_intercell_guard_keep_best_feasible = True
+        updated.reward.step_action_intercell_penalty_weight = 1.35
+        updated.reward.step_intercell_outgoing_delta_penalty_weight = 2.80
+        updated.reward.terminal_intercell_rate_loss_ratio_penalty_weight = 14.0
+        updated.reward.terminal_intercell_power_penalty_weight = 7.0
+        updated.reward.terminal_puncture_intercell_penalty_weight = 3.5
+        updated.reward.high_intercell_admission_penalty_weight = 0.45
+        return updated
+
+    if normalized == EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_6_INTERCELL_GUARD_OWNER_EFFECTIVE:
+        # v1.6: from v1.5, target higher owner execution effectiveness while further suppressing intercell-heavy actions.
+        updated = apply_experiment_preset(
+            updated,
+            EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_5_INTERCELL_GUARD_OWNER_UNFREEZE,
+        )
+        updated.training.experiment_line = normalized
+        updated.training.run_name = "sr_mappo_phase0_joint_full_power_service_interference_repair_v8_mappo_mix73_dominance_v1_6_intercell_guard_owner_effective"
+
+        # Increase the chance that non-snapshot owner edits survive to execution.
+        updated.env.phase0_owner_max_change_ratio = 0.35
+        updated.env.owner_max_negative_accept_ratio = 0.65
+        updated.reward.owner_harmful_change_penalty_weight = 0.07
+        updated.reward.owner_dropped_raw_churn_penalty_weight = 0.010
+        updated.training.phase_a_embb_power_anchor_weight = 0.10
+
+        # Keep reliability strict while avoiding over-tight admission lock.
+        updated.training.selection_reliability_floor = 0.99995
+        updated.training.selection_admission_floor_ratio_to_baseline = 0.90
+
+        # Stronger intercell guard and penalties to reduce high-intercell selected actions.
+        updated.env.enable_action_intercell_guard = True
+        updated.env.action_intercell_guard_ratio_to_local_min = 1.08
+        updated.env.action_intercell_guard_keep_best_feasible = True
+        updated.reward.step_action_intercell_penalty_weight = 1.80
+        updated.reward.step_intercell_outgoing_delta_penalty_weight = 3.60
+        updated.reward.terminal_intercell_rate_loss_ratio_penalty_weight = 18.0
+        updated.reward.terminal_intercell_power_penalty_weight = 9.0
+        updated.reward.terminal_puncture_intercell_penalty_weight = 4.5
+        updated.reward.high_intercell_admission_penalty_weight = 0.65
+        return updated
+
+    if normalized == EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_7_OWNER_BUDGET_ADMISSION_STABLE:
+        # v1.7: from v1.6, improve owner-change execution efficiency and stabilize high-load admission.
+        updated = apply_experiment_preset(
+            updated,
+            EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_6_INTERCELL_GUARD_OWNER_EFFECTIVE,
+        )
+        updated.training.experiment_line = normalized
+        updated.training.run_name = "sr_mappo_phase0_joint_full_power_service_interference_repair_v8_mappo_mix73_dominance_v1_7_owner_budget_admission_stable"
+
+        # Owner budget: allow more than one effective change per slot under committed mode.
+        updated.env.phase0_owner_change_budget_mode = "full_snapshot_legacy"
+        updated.env.phase0_owner_max_change_ratio = 0.50
+
+        # Reduce harmful accepted changes and push objective consistency.
+        updated.env.owner_max_negative_accept_ratio = 0.45
+        updated.reward.owner_harmful_change_penalty_weight = 0.16
+        updated.reward.owner_dropped_raw_churn_penalty_weight = 0.012
+
+        # Add stronger pressure against intercell-heavy / power-heavy actions so
+        # admission gains are less likely to be bought by interference/power spikes.
+        updated.reward.step_action_intercell_penalty_weight = 2.20
+        updated.reward.step_intercell_outgoing_delta_penalty_weight = 4.20
+        updated.reward.terminal_intercell_rate_loss_ratio_penalty_weight = 22.0
+        updated.reward.terminal_intercell_power_penalty_weight = 11.0
+        updated.reward.terminal_puncture_intercell_penalty_weight = 5.5
+        updated.reward.high_intercell_admission_penalty_weight = 0.80
+
+        # Keep admission more stable at medium/high load.
+        updated.training.selection_admission_floor_ratio_to_baseline = 0.95
+        updated.training.selection_admission_floor = 0.0
+        updated.training.selection_admission_floor_by_load = {
+            9.0: 0.62,
+            12.0: 0.66,
+            15.0: 0.64,
+            18.0: 0.61,
+            21.0: 0.58,
+            24.0: 0.58,
+        }
+        return updated
+
+    if normalized == EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V2_WARMUP:
+        # Warmup dominance preset: keep direction but avoid early training deadlock.
+        updated = apply_experiment_preset(updated, EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1)
+        updated.training.experiment_line = normalized
+        updated.training.run_name = "sr_mappo_phase0_joint_full_power_service_interference_repair_v8_mappo_mix73_dominance_v2_warmup"
+
+        # Relax dominance floors so policy can move before strict gate.
+        common_loads = {5.0: 1.0, 10.0: 1.0, 15.0: 1.0, 20.0: 1.0, 25.0: 1.0}
+        updated.training.selection_score_weights_by_load = dict(common_loads)
+        updated.training.selection_throughput_ratio_floor_by_load = {k: 0.95 for k in common_loads}
+        updated.training.selection_admission_floor_ratio_to_baseline = 1.05
+        updated.training.selection_reliability_floor = 0.999
+        updated.training.selection_service_ratio_floor_by_load = {k: 1.05 for k in common_loads}
+        updated.training.selection_minrate_ratio_floor_by_load = {k: 1.05 for k in common_loads}
+
+        # Let phase-0 owner edits actually survive gate/budget in warmup.
+        updated.env.phase0_owner_max_change_ratio = max(float(getattr(updated.env, "phase0_owner_max_change_ratio", 0.0) or 0.0), 0.45)
+        updated.env.owner_max_negative_accept_ratio = 0.50
+        updated.reward.owner_harmful_change_penalty_weight = 0.12
+        updated.reward.owner_dropped_raw_churn_penalty_weight = 0.03
+
+        # Reduce phase-A anchor clamp to avoid near-zero execution.
+        updated.training.phase_a_embb_power_anchor_weight = 0.15
+        return updated
+
+    if normalized == EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V3_ACTION_REWARD_ALIGNED:
+        # v3: keep dominance direction while explicitly improving executed-action effectiveness.
+        updated = apply_experiment_preset(updated, EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V2_WARMUP)
+        updated.training.experiment_line = normalized
+        updated.training.run_name = "sr_mappo_phase0_joint_full_power_service_interference_repair_v8_mappo_mix73_dominance_v3_action_reward_aligned"
+
+        common_loads = {5.0: 1.0, 10.0: 1.0, 15.0: 1.0, 20.0: 1.0, 25.0: 1.0}
+        updated.training.selection_score_weights_by_load = dict(common_loads)
+        updated.training.selection_throughput_ratio_floor_by_load = {k: 0.96 for k in common_loads}
+        updated.training.selection_admission_floor_ratio_to_baseline = 1.10
+        updated.training.selection_reliability_floor = 0.999
+        updated.training.selection_service_ratio_floor_by_load = {k: 1.10 for k in common_loads}
+        updated.training.selection_minrate_ratio_floor_by_load = {k: 1.10 for k in common_loads}
+
+        # Keep more raw owner edits alive through execution gating.
+        updated.env.phase0_owner_max_change_ratio = max(float(getattr(updated.env, "phase0_owner_max_change_ratio", 0.0) or 0.0), 0.60)
+        updated.env.owner_max_negative_accept_ratio = 0.65
+
+        # Reward shaping: tighten objective consistency instead of only checkpoint filtering.
+        updated.reward.planning_embb_service_weight = 0.35
+        updated.reward.planning_embb_min_rate_weight = 0.25
+        updated.reward.owner_harmful_change_penalty_weight = 0.08
+        updated.reward.owner_dropped_raw_churn_penalty_weight = 0.015
+        updated.reward.owner_negative_rate_gain_penalty_weight = 0.25
+        updated.reward.owner_negative_service_gain_penalty_weight = 0.25
+        updated.reward.owner_negative_objective_gain_penalty_weight = 0.20
+        updated.reward.owner_changed_but_no_service_penalty_weight = 0.15
+        updated.reward.terminal_admission_floor_soft_penalty_weight = 3.0
+        updated.reward.terminal_admission_floor_soft_penalty_floor_by_load = {
+            5.0: 0.14,
+            10.0: 0.12,
+            15.0: 0.10,
+            20.0: 0.09,
+            25.0: 0.08,
+        }
+        updated.reward.terminal_admission_floor_soft_penalty_weight_by_load = {
+            5.0: 2.0,
+            10.0: 2.5,
+            15.0: 3.0,
+            20.0: 3.5,
+            25.0: 4.0,
+        }
+
+        # Lighter anchor: keep stability but avoid suppressing phase-A execution.
+        updated.training.phase_a_embb_power_anchor_weight = 0.08
+        updated.training.phase_a_embb_power_anchor_start_iteration = 300
+        return updated
+
+    if normalized == EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX010_DEBUG:
+        updated = apply_experiment_preset(updated, EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_PHASEA_ANTISATURATION_DEBUG)
+        updated.training.experiment_line = normalized
+        updated.training.run_name = "sr_mappo_phase0_joint_full_power_service_interference_repair_v8_greedy_mix010_debug"
+        updated.training.train_seed = 20260501
+        updated.training.enable_timing_logs = True
+        updated.env.greedy_urllc_share_mode = "fixed_share"
+        updated.env.greedy_urllc_share_ratio = 0.10
+        # User composition override for report/compare density scenario: eMBB:URLLC = 0:10.
+        updated.env.urllc_user_ratio_override = 1.00
+        updated.env.urllc_poisson_rate_is_per_user = True
+        updated.env.urllc_poisson_rate = 2.0
+        updated.env.fixed_urllc_poisson_rate = True
+        updated.env.freeze_association_across_episodes = False
+        updated.env.freeze_channel_gains_across_episodes = False
+        return updated
+
+    if normalized == EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX100_DEBUG:
+        updated = apply_experiment_preset(updated, EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_PHASEA_ANTISATURATION_DEBUG)
+        updated.training.experiment_line = normalized
+        updated.training.run_name = "sr_mappo_phase0_joint_full_power_service_interference_repair_v8_greedy_mix100_debug"
+        updated.training.train_seed = 20260501
+        updated.training.enable_timing_logs = True
+        updated.env.greedy_urllc_share_mode = "fixed_share"
+        updated.env.greedy_urllc_share_ratio = 0.10
+        # User composition override for report/compare density scenario: eMBB:URLLC = 10:0.
+        updated.env.urllc_user_ratio_override = 0.00
+        updated.env.urllc_poisson_rate_is_per_user = True
+        updated.env.urllc_poisson_rate = 2.0
+        updated.env.fixed_urllc_poisson_rate = True
+        updated.env.freeze_association_across_episodes = False
+        updated.env.freeze_channel_gains_across_episodes = False
+        return updated
+
+    if normalized == EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_SHARE20_DEBUG:
+        updated = apply_experiment_preset(updated, EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_PHASEA_ANTISATURATION_DEBUG)
+        updated.training.experiment_line = normalized
+        updated.training.run_name = "sr_mappo_phase0_joint_full_power_service_interference_repair_v8_greedy_share20_debug"
+        updated.training.train_seed = 20260501
+        updated.env.greedy_urllc_share_mode = "fixed_share"
+        updated.env.greedy_urllc_share_ratio = 0.20
+        updated.env.urllc_poisson_rate_is_per_user = True
+        updated.env.freeze_association_across_episodes = True
+        updated.env.freeze_channel_gains_across_episodes = True
+        return updated
+
+    if normalized == EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_SHARE30_DEBUG:
+        updated = apply_experiment_preset(updated, EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_PHASEA_ANTISATURATION_DEBUG)
+        updated.training.experiment_line = normalized
+        updated.training.run_name = "sr_mappo_phase0_joint_full_power_service_interference_repair_v8_greedy_share30_debug"
+        updated.training.train_seed = 20260501
+        updated.env.greedy_urllc_share_mode = "fixed_share"
+        updated.env.greedy_urllc_share_ratio = 0.30
+        updated.env.urllc_poisson_rate_is_per_user = True
+        updated.env.freeze_association_across_episodes = True
+        updated.env.freeze_channel_gains_across_episodes = True
         return updated
 
     if normalized == EXPERIMENT_FAIR:

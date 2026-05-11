@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import argparse
+import os
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
@@ -80,14 +81,25 @@ def _build_main_like_configs() -> Tuple[SystemConfig, URLLCConfig, eMBBConfig, A
     sim_cfg = SimulationConfig()
     sim_cfg.verbose = False
     sim_cfg.urllc_arrival_prob = 0.45
-    # Slot-based Poisson arrival rate (pkt/slot). The simulator samples per-slot
-    # arrivals via `np.random.poisson(urllc_poisson_rate)`.
-    sim_cfg.urllc_poisson_rate = 8
-    sim_cfg.fixed_urllc_poisson_rate = True
+    # Slot-based Poisson arrival rate (pkt/slot). We use load-scaled total-rate
+    # semantics (fixed=False): lambda(load)=base_lambda*load/base_total_per_uav.
+    # With base_total_per_uav~=10, base_lambda=25.6 maps load=25 to ~64 pkt/slot.
+    sim_cfg.urllc_poisson_rate = 25.6
+    sim_cfg.fixed_urllc_poisson_rate = False
     sim_cfg.urllc_user_ratio = 0.30
     sim_cfg.min_user_density = 1
     sim_cfg.max_user_density = 40
     sim_cfg.num_density_points = 6
+
+    # Optional runtime override for report/compare sweeps.
+    # Useful when we need a fixed per-user lambda debug run without editing presets.
+    poisson_override = os.environ.get("SR_MAPPO_URLLC_POISSON_RATE_OVERRIDE", "").strip()
+    if poisson_override:
+        try:
+            sim_cfg.urllc_poisson_rate = float(poisson_override)
+            sim_cfg.fixed_urllc_poisson_rate = True
+        except ValueError:
+            pass
     return sys_cfg, urllc_cfg, embb_cfg, algo_cfg, sim_cfg
 
 
@@ -333,13 +345,18 @@ def _configure_density_scenario(
 
     total_users = max(1, int(round(base_total_per_uav * sys_cfg.num_uavs * scale)))
     urllc_ratio = float(getattr(sim_cfg, 'urllc_user_ratio', 0.0))
-    urllc_ratio = float(np.clip(urllc_ratio, 0.0, 0.95))
-    if urllc_ratio > 0.0:
+    urllc_ratio = float(np.clip(urllc_ratio, 0.0, 1.0))
+    if urllc_ratio <= 0.0:
+        # Explicitly support eMBB-only scenario (URLLC ratio = 0.0).
+        sys_cfg.num_urllc_users = 0
+        sys_cfg.num_embb_users = max(1, total_users)
+    elif urllc_ratio >= 1.0:
+        # Explicitly support URLLC-only scenario (URLLC ratio = 1.0).
+        sys_cfg.num_urllc_users = max(1, total_users)
+        sys_cfg.num_embb_users = 0
+    else:
         sys_cfg.num_urllc_users = max(1, int(round(total_users * urllc_ratio)))
         sys_cfg.num_embb_users = max(1, total_users - sys_cfg.num_urllc_users)
-    else:
-        sys_cfg.num_embb_users = max(1, int(round(base_embb_per_uav * sys_cfg.num_uavs * scale)))
-        sys_cfg.num_urllc_users = max(1, int(round(base_urllc_per_uav * sys_cfg.num_uavs * scale)))
     sys_cfg.refresh_derived_params()
 
     urllc_cfg.power_limits = [24] * sys_cfg.num_urllc_users
