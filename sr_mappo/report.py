@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from copy import deepcopy
 import json
 import os
@@ -109,6 +110,8 @@ FAST_LOADS = list(DEFAULT_LOADS)
 FAST_EPISODES_PER_LOAD = 1
 FAST_GREEDY_ONLY_EPISODES_PER_LOAD = 100
 FAST_GREEDY_ONLY_VERBOSE_PER_EPISODE = False
+REPORT_HEARTBEAT_EVERY_EPISODES = max(1, int(os.environ.get("SR_MAPPO_REPORT_HEARTBEAT_EVERY_EPISODES", "1") or "1"))
+REPORT_VERBOSE_VSLOT = str(os.environ.get("SR_MAPPO_REPORT_VERBOSE_VSLOT", "") or "").strip().lower() in {"1", "true", "yes", "on"}
 FAST_TIMESLOT_SERIES_LOAD = 20.0
 FAST_TIMESLOT_SERIES_SLOTS = 20
 MODE_ORDER = [MODE_KEEP, MODE_OVERLAY, MODE_PUNCTURE]
@@ -134,6 +137,10 @@ CURRENT_TOP_LEVEL_REPORT_FILES = {
     '17_method_decomposition_dense.png',
     '18_marginal_degradation_slopes.png',
     '19_mode_anchor_debug.png',
+    'custom_min_rate_satisfied_count_compare.png',
+    'custom_admitted_urllc_packets_compare.png',
+    'mode_action_share_compare.png',
+    'mode_raw_vs_executed_compare.png',
     'sr_mappo_report_metrics.json',
     'throughput_admission_frontier.json',
     'report_run_manifest.json',
@@ -154,6 +161,16 @@ def _report_timing_log(message: str) -> None:
     if not _REPORT_TIMING_ENABLED:
         return
     _report_log(message)
+
+
+def _report_is_pure_sumrate_policy_name(policy_name: object) -> bool:
+    normalized = str(policy_name or "").strip().lower()
+    return normalized in {
+        "global_sumrate_only",
+        "sumrate_only",
+        "pure_sumrate",
+        "global_tp_only",
+    }
 
 
 def _reset_report_runtime_cache() -> None:
@@ -223,6 +240,363 @@ def _run_episode_batch_with_representative(episodes_per_load: int, runner) -> Tu
         if episode_idx == 0:
             representative = deepcopy(result)
     return episodes, representative
+
+
+def _build_episode_scene_audit(episodes: List[Dict]) -> Dict[str, object]:
+    rows: List[Dict[str, object]] = []
+    for episode_idx, episode in enumerate(episodes):
+        rows.append({
+            "episode_index": int(episode_idx),
+            "report_episode_seed": int(float(episode.get("report_episode_seed", 0.0) or 0.0)),
+            "outer_report_episode_seed": int(float(episode.get("outer_report_episode_seed", episode.get("report_episode_seed", 0.0)) or 0.0)),
+            "virtual_slot_reset_seed_first": int(float(episode.get("virtual_slot_reset_seed_first", episode.get("report_episode_seed", 0.0)) or 0.0)),
+            "virtual_slots_per_episode": int(float(episode.get("virtual_slots_per_episode", 1.0) or 1.0)),
+            "mother_topology_id": str(episode.get("mother_topology_id", "") or ""),
+            "mother_topology_seed": float(episode.get("mother_topology_seed", 0.0) or 0.0),
+            "same_assoc_hash": str(episode.get("same_assoc_hash", "") or ""),
+            "same_channel_hash": str(episode.get("same_channel_hash", "") or ""),
+            "same_user_pool_hash": str(episode.get("same_user_pool_hash", "") or ""),
+            "mix_user_subset_hash": str(episode.get("mix_user_subset_hash", "") or ""),
+            "embb_subset_hash": str(episode.get("embb_subset_hash", "") or ""),
+            "same_feasible_graph_hash": str(episode.get("same_feasible_graph_hash", "") or ""),
+            "feasible_graph_id": str(episode.get("feasible_graph_id", "") or ""),
+            "overlay_graph_hash": str(episode.get("overlay_graph_hash", "") or ""),
+            "channel_matrix_hash": str(episode.get("channel_matrix_hash", "") or ""),
+            "pathloss_hash": str(episode.get("pathloss_hash", "") or ""),
+            "shadowing_hash": str(episode.get("shadowing_hash", "") or ""),
+            "sic_order_hash": str(episode.get("sic_order_hash", "") or ""),
+            "repair_sequence_hash": str(episode.get("repair_sequence_hash", "") or ""),
+            "active_packets": float(episode.get("active_packets", 0.0) or 0.0),
+            "scheduled_packets": float(episode.get("scheduled_packets", 0.0) or 0.0),
+            "urllc_admission": float(episode.get("urllc_admission", 0.0) or 0.0),
+        })
+
+    def _unique_count(key: str) -> int:
+        values = [str(row.get(key, "") or "") for row in rows]
+        return int(len({value for value in values if value}))
+
+    return {
+        "episodes": rows,
+        "consistency": {
+            "unique_report_episode_seed_count": int(len({int(row["report_episode_seed"]) for row in rows})),
+            "unique_outer_report_episode_seed_count": int(len({int(row["outer_report_episode_seed"]) for row in rows})),
+            "unique_virtual_slot_reset_seed_first_count": int(len({int(row["virtual_slot_reset_seed_first"]) for row in rows})),
+            "unique_mother_topology_id_count": _unique_count("mother_topology_id"),
+            "unique_mother_topology_seed_count": int(
+                len({float(row["mother_topology_seed"]) for row in rows if float(row["mother_topology_seed"]) != 0.0})
+            ),
+            "unique_same_assoc_hash_count": _unique_count("same_assoc_hash"),
+            "unique_same_channel_hash_count": _unique_count("same_channel_hash"),
+            "unique_same_user_pool_hash_count": _unique_count("same_user_pool_hash"),
+            "unique_mix_user_subset_hash_count": _unique_count("mix_user_subset_hash"),
+            "unique_embb_subset_hash_count": _unique_count("embb_subset_hash"),
+            "unique_same_feasible_graph_hash_count": _unique_count("same_feasible_graph_hash"),
+        },
+    }
+
+
+def _build_pairing_fairness_audit(
+    rl_metrics: Dict[str, object],
+    baseline_metrics: Dict[str, object],
+) -> Dict[str, object]:
+    rl_audit = dict(rl_metrics.get("episode_scene_audit", {}) or {})
+    baseline_audit = dict(baseline_metrics.get("episode_scene_audit", {}) or {})
+    load_keys = sorted(
+        set(rl_audit.keys()) | set(baseline_audit.keys()),
+        key=lambda key: float(key),
+    )
+    compare_keys = [
+        "report_episode_seed",
+        "outer_report_episode_seed",
+        "virtual_slot_reset_seed_first",
+        "virtual_slots_per_episode",
+        "mother_topology_id",
+        "mother_topology_seed",
+        "same_assoc_hash",
+        "same_channel_hash",
+        "same_user_pool_hash",
+        "mix_user_subset_hash",
+        "embb_subset_hash",
+        "same_feasible_graph_hash",
+        "feasible_graph_id",
+        "overlay_graph_hash",
+        "channel_matrix_hash",
+        "pathloss_hash",
+        "shadowing_hash",
+        "sic_order_hash",
+        "repair_sequence_hash",
+        "active_packets",
+    ]
+    float_keys = {"mother_topology_seed", "active_packets"}
+    per_load: Dict[str, object] = {}
+    total_pairs = 0
+    total_mismatched_pairs = 0
+    total_missing_pairs = 0
+    mismatch_key_counts = {key: 0 for key in compare_keys}
+
+    for load_key in load_keys:
+        rl_eps = list(((rl_audit.get(load_key) or {}).get("episodes", [])) if isinstance(rl_audit.get(load_key), dict) else [])
+        baseline_eps = list(((baseline_audit.get(load_key) or {}).get("episodes", [])) if isinstance(baseline_audit.get(load_key), dict) else [])
+        episode_count = max(len(rl_eps), len(baseline_eps))
+        load_mismatches: List[Dict[str, object]] = []
+        missing_episode_indices: List[int] = []
+        matched_pairs = 0
+
+        for episode_idx in range(episode_count):
+            rl_ep = rl_eps[episode_idx] if episode_idx < len(rl_eps) else None
+            baseline_ep = baseline_eps[episode_idx] if episode_idx < len(baseline_eps) else None
+            total_pairs += 1
+            if rl_ep is None or baseline_ep is None:
+                total_missing_pairs += 1
+                missing_episode_indices.append(int(episode_idx))
+                continue
+
+            mismatched_keys: List[str] = []
+            for key in compare_keys:
+                rl_value = rl_ep.get(key)
+                baseline_value = baseline_ep.get(key)
+                if key in float_keys:
+                    rl_float = float(rl_value or 0.0)
+                    baseline_float = float(baseline_value or 0.0)
+                    if abs(rl_float - baseline_float) > 1.0e-9:
+                        mismatched_keys.append(key)
+                else:
+                    if str(rl_value or "") != str(baseline_value or ""):
+                        mismatched_keys.append(key)
+            if mismatched_keys:
+                total_mismatched_pairs += 1
+                for key in mismatched_keys:
+                    mismatch_key_counts[key] += 1
+                load_mismatches.append({
+                    "episode_index": int(episode_idx),
+                    "mismatched_keys": mismatched_keys,
+                    "rl": {key: rl_ep.get(key) for key in compare_keys},
+                    "baseline": {key: baseline_ep.get(key) for key in compare_keys},
+                })
+            else:
+                matched_pairs += 1
+
+        per_load[load_key] = {
+            "load": float(load_key),
+            "paired_episode_count": int(episode_count),
+            "matched_episode_count": int(matched_pairs),
+            "mismatched_episode_count": int(len(load_mismatches)),
+            "missing_episode_count": int(len(missing_episode_indices)),
+            "matched_all": bool((not load_mismatches) and (not missing_episode_indices)),
+            "missing_episode_indices": missing_episode_indices,
+            "mismatches": load_mismatches,
+        }
+
+    nonzero_mismatch_key_counts = {key: int(value) for key, value in mismatch_key_counts.items() if int(value) > 0}
+    return {
+        "paired_all": bool(total_mismatched_pairs == 0 and total_missing_pairs == 0),
+        "loads_compared": int(len(load_keys)),
+        "total_episode_pairs": int(total_pairs),
+        "mismatched_episode_pairs": int(total_mismatched_pairs),
+        "missing_episode_pairs": int(total_missing_pairs),
+        "mismatch_key_counts": nonzero_mismatch_key_counts,
+        "loads": per_load,
+    }
+
+
+def _aggregate_virtual_slot_results(slot_results: List[Dict], virtual_slots: int) -> Dict:
+    """Aggregate multiple single-slot episode summaries into one virtual multi-slot episode.
+
+    We keep action space/sequential decision unchanged, and only extend horizon at report-time.
+    """
+    if not slot_results:
+        return {}
+    if virtual_slots <= 1 or len(slot_results) == 1:
+        return deepcopy(slot_results[0])
+
+    sum_keys = {
+        "active_packets",
+        "scheduled_packets",
+        "overlay_count",
+        "puncture_count",
+        "virtual_slot_reset_count_per_episode",
+    }
+    keep_first_keys = {
+        "phase",
+        "trace",
+        "user_positions",
+        "uav_positions",
+    }
+
+    agg: Dict[str, object] = {}
+    all_keys = set()
+    for item in slot_results:
+        all_keys.update(item.keys())
+
+    for key in all_keys:
+        values = [item.get(key) for item in slot_results if key in item]
+        if not values:
+            continue
+        first = values[0]
+        if key in keep_first_keys:
+            agg[key] = deepcopy(first)
+            continue
+        if isinstance(first, np.ndarray):
+            try:
+                arrs = [np.asarray(v, dtype=float) for v in values]
+                if all(arr.shape == arrs[0].shape for arr in arrs):
+                    agg[key] = np.mean(np.stack(arrs, axis=0), axis=0)
+                    continue
+            except Exception:
+                agg[key] = deepcopy(first)
+                continue
+        if isinstance(first, (int, float, np.floating, np.integer, bool)):
+            vals = np.asarray(values, dtype=float)
+            if key in sum_keys:
+                agg[key] = float(np.sum(vals))
+            else:
+                agg[key] = float(np.mean(vals))
+            continue
+        agg[key] = deepcopy(first)
+
+    # Recompute key KPIs from accumulated arrivals/admissions across virtual slots.
+    active_packets = float(agg.get("active_packets", 0.0) or 0.0)
+    scheduled_packets = float(agg.get("scheduled_packets", 0.0) or 0.0)
+    if active_packets > 0.0:
+        agg["urllc_admission"] = float(scheduled_packets / max(active_packets, 1.0e-12))
+    else:
+        agg["urllc_admission"] = 1.0
+
+    slot_dur = float(agg.get("urllc_slot_duration_s", 1.0e-3) or 1.0e-3)
+    pkt_bits = float(agg.get("urllc_packet_bits_mean", 160.0) or 160.0)
+    total_bits = float(scheduled_packets * pkt_bits)
+    avg_bps = float(total_bits / max(float(virtual_slots) * slot_dur, 1.0e-12))
+    agg["urllc_throughput_bps_slot_est"] = avg_bps
+    agg["urllc_throughput_mbps_slot_est"] = float(avg_bps / 1.0e6)
+    agg["urllc_throughput_bps_est"] = agg["urllc_throughput_bps_slot_est"]
+    agg["virtual_slots_per_episode"] = float(virtual_slots)
+    return agg
+
+
+def _run_env_episode_virtual_slots(
+    env: SRMAPPOPhaseAEnv,
+    model: Optional[SRMAPPOActorCritic],
+    cfg: SRMAPPOConfig,
+    seed: int,
+    collect_trace: bool,
+    use_greedy: bool,
+    greedy_policy: str,
+    cache_tag: str,
+    virtual_slots: int,
+) -> Dict:
+    _MAX_NUMPY_SEED = (2**32) - 1
+    if int(virtual_slots) <= 1:
+        return run_env_episode(
+            env,
+            model=model,
+            cfg=cfg,
+            seed=seed,
+            collect_trace=collect_trace,
+            use_greedy=use_greedy,
+            greedy_policy=greedy_policy,
+            cache_tag=cache_tag,
+            reuse_static_context=False,
+            reset_count_contribution=1.0,
+        )
+
+    slot_results: List[Dict] = []
+    for slot_idx in range(int(virtual_slots)):
+        # Keep deterministic per-slot perturbation while staying within numpy seed bounds.
+        slot_seed = int((int(seed) * 1009 + int(slot_idx)) % _MAX_NUMPY_SEED)
+        if slot_seed <= 0:
+            slot_seed = int(slot_idx + 1)
+        if REPORT_VERBOSE_VSLOT:
+            _report_log(
+                f"[GREEDY][vs={int(virtual_slots)}] slot {int(slot_idx)+1}/{int(virtual_slots)} "
+                f"| seed={int(slot_seed)} | reuse_static_context={int(slot_idx > 0)} | cache_tag={cache_tag}"
+            )
+        slot_t0 = perf_counter()
+        slot_result = run_env_episode(
+                env,
+                model=model,
+                cfg=cfg,
+                seed=slot_seed,
+                collect_trace=(collect_trace and slot_idx == 0),
+                use_greedy=use_greedy,
+                greedy_policy=greedy_policy,
+                cache_tag=f"{cache_tag}|vs{virtual_slots}|s{slot_idx}",
+                reuse_static_context=bool(slot_idx > 0),
+                reset_count_contribution=(1.0 if slot_idx == 0 else 0.0),
+            )
+        slot_results.append(slot_result)
+        if REPORT_VERBOSE_VSLOT:
+            _report_log(
+                f"[GREEDY][vs={int(virtual_slots)}] slot {int(slot_idx)+1}/{int(virtual_slots)} done "
+                f"| sec={perf_counter()-slot_t0:.3f} | arrivals={float(slot_result.get('active_packets', 0.0)):.2f} "
+                f"| admitted={float(slot_result.get('scheduled_packets', 0.0)):.2f}"
+            )
+    agg = _aggregate_virtual_slot_results(slot_results, int(virtual_slots))
+    agg["outer_report_episode_seed"] = float(seed)
+    agg["report_episode_seed"] = float(seed)
+    agg["virtual_slot_reset_seed_first"] = float(slot_results[0].get("report_episode_seed", seed)) if slot_results else float(seed)
+    return agg
+
+
+@contextmanager
+def _temporary_shared_mother_scene_for_episode(
+    env: SRMAPPOPhaseAEnv,
+    load: float,
+    load_idx: int,
+    episode_seed: int,
+):
+    enabled = bool(_env_bool_override("SR_MAPPO_REPORT_SHARED_MOTHER_RESAMPLE_EACH_EPISODE", False))
+    if not enabled:
+        yield
+        return
+
+    base_mother_id = str(os.environ.get("SR_MAPPO_MOTHER_TOPOLOGY_ID", "") or "").strip()
+    base_feasible_graph_id = str(os.environ.get("SR_MAPPO_FEASIBLE_GRAPH_ID", "") or "").strip()
+    if not base_mother_id:
+        base_mother_id = "shared_mother_scene"
+    if not base_feasible_graph_id:
+        base_feasible_graph_id = base_mother_id
+
+    scene_suffix = (
+        f"__shared_ep_scene"
+        f"_load{float(load):.12g}"
+        f"_idx{int(load_idx)}"
+        f"_seed{int(episode_seed)}"
+    )
+    previous_values = {
+        "SR_MAPPO_MOTHER_TOPOLOGY_FREEZE": os.environ.get("SR_MAPPO_MOTHER_TOPOLOGY_FREEZE"),
+        "SR_MAPPO_FEASIBLE_GRAPH_FREEZE": os.environ.get("SR_MAPPO_FEASIBLE_GRAPH_FREEZE"),
+        "SR_MAPPO_MOTHER_TOPOLOGY_ID": os.environ.get("SR_MAPPO_MOTHER_TOPOLOGY_ID"),
+        "SR_MAPPO_FEASIBLE_GRAPH_ID": os.environ.get("SR_MAPPO_FEASIBLE_GRAPH_ID"),
+    }
+    os.environ["SR_MAPPO_MOTHER_TOPOLOGY_FREEZE"] = "1"
+    os.environ["SR_MAPPO_FEASIBLE_GRAPH_FREEZE"] = "1"
+    os.environ["SR_MAPPO_MOTHER_TOPOLOGY_ID"] = f"{base_mother_id}{scene_suffix}"
+    os.environ["SR_MAPPO_FEASIBLE_GRAPH_ID"] = f"{base_feasible_graph_id}{scene_suffix}"
+
+    # When we intentionally hop to a new shared mother scene per episode, every
+    # env-level cache that depends on the frozen scene must be cleared first.
+    # Otherwise a later episode can inherit association/channel/subset/baseline
+    # artifacts from the previous seed and produce a hybrid scene that matches
+    # neither the old nor the new mother seed.
+    for attr_name in (
+        "_fixed_association_cache",
+        "_fixed_channel_gains_cache",
+        "_fixed_last_topology_cache",
+        "_fixed_nested_user_indices_cache",
+        "_phase0_baseline_snapshot_cache",
+        "_nested_canonical_ur_order_cache",
+        "_nested_canonical_em_order_cache",
+    ):
+        if hasattr(env, attr_name):
+            setattr(env, attr_name, None)
+    try:
+        yield
+    finally:
+        for key, old_value in previous_values.items():
+            if old_value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = old_value
 
 
 def _cleanup_stale_report_artifacts() -> List[str]:
@@ -317,7 +691,29 @@ def _report_overlap_note(
 
 
 def _episode_scalar_mean(episodes: List[Dict], key: str, default: float = 0.0) -> float:
-    return _safe_mean([episode.get(key, default) for episode in episodes], default=default)
+    value = _episode_scalar_aggregate(episodes, key, default=default)
+    try:
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+def _episode_scalar_aggregate(episodes: List[Dict], key: str, default=0.0):
+    values = [episode.get(key, default) for episode in episodes]
+    if not values:
+        return default
+    sample = None
+    for value in values:
+        if value is not None:
+            sample = value
+            break
+    if isinstance(sample, str):
+        counts: Dict[str, int] = {}
+        for value in values:
+            label = str(value)
+            counts[label] = counts.get(label, 0) + 1
+        return sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
+    return _safe_mean(values, default=default)
 
 
 def _metric_scalar_mean(value, default: float = 0.0) -> float:
@@ -387,6 +783,88 @@ def _resolve_forced_urllc_ratio(report_cfg: SRMAPPOConfig) -> float:
     return -1.0
 
 
+def _apply_forced_urllc_ratio_to_sim(
+    sim_cfg: object,
+    report_cfg: SRMAPPOConfig,
+    *,
+    log_prefix: str,
+) -> float:
+    """Apply the report-time mix override to a simulation config when present.
+
+    Several report paths rebuild `base_sim` from defaults instead of reusing the
+    greedy-sweep path directly. Without reapplying the forced mix ratio here,
+    MAPPO-side evaluation can silently fall back to the default 7:3-style user
+    split while Greedy is evaluated under the requested mix override.
+    """
+    forced_ratio = _resolve_forced_urllc_ratio(report_cfg)
+    if hasattr(sim_cfg, "urllc_user_ratio") and forced_ratio >= 0.0:
+        sim_cfg.urllc_user_ratio = float(np.clip(forced_ratio, 0.0, 1.0))
+        _report_log(
+            f"[{log_prefix}] forcing urllc_user_ratio={float(sim_cfg.urllc_user_ratio):.3f} "
+            f"(override={float(getattr(report_cfg.env, 'urllc_user_ratio_override', -1.0)):.3f})"
+        )
+    return float(forced_ratio)
+
+
+def _canonical_greedy_mix_experiment_for_ratio(ratio: float) -> str | None:
+    targets = {
+        0.0: "phase0_joint_full_power_service_interference_repair_v8_greedy_mix100_debug",
+        0.3: "phase0_joint_full_power_service_interference_repair_v8_greedy_mix73_debug",
+        0.5: "phase0_joint_full_power_service_interference_repair_v8_greedy_mix55_debug",
+        0.7: "phase0_joint_full_power_service_interference_repair_v8_greedy_mix37_debug",
+        1.0: "phase0_joint_full_power_service_interference_repair_v8_greedy_mix010_debug",
+    }
+    for key, exp in targets.items():
+        if abs(float(ratio) - float(key)) <= 1.0e-9:
+            return exp
+    return None
+
+
+def _maybe_realign_greedy_mix_preset(report_cfg: SRMAPPOConfig) -> SRMAPPOConfig:
+    disable_realign = str(
+        os.environ.get("SR_MAPPO_REPORT_DISABLE_CANONICAL_GREEDY_MIX_REALIGN", "") or ""
+    ).strip().lower()
+    if disable_realign in {"1", "true", "yes", "on"}:
+        _report_log("[OVERRIDE] disable canonical greedy mix preset realign.")
+        return report_cfg
+    legacy_mix_override = str(os.environ.get("SR_MAPPO_REPORT_LEGACY_MIX_OVERRIDE", "") or "").strip().lower()
+    if legacy_mix_override in {"1", "true", "yes", "on"}:
+        _report_log("[OVERRIDE] keep legacy greedy mix preset behavior (skip canonical preset realign).")
+        return report_cfg
+    forced_ratio = _resolve_forced_urllc_ratio(report_cfg)
+    if forced_ratio < 0.0:
+        return report_cfg
+    current_exp = str(getattr(report_cfg.training, "experiment_line", "") or "").strip().lower()
+    if "phase0_joint_full_power_service_interference_repair_v8_greedy_" not in current_exp:
+        return report_cfg
+    target_exp = _canonical_greedy_mix_experiment_for_ratio(forced_ratio)
+    if not target_exp or current_exp == target_exp:
+        return report_cfg
+    _report_log(
+        f"[OVERRIDE] realign greedy mix preset: experiment_line={current_exp} -> {target_exp} "
+        f"(forced urllc ratio={float(forced_ratio):.3f})"
+    )
+    aligned = apply_experiment_preset(SRMAPPOConfig(), target_exp)
+    # Preserve explicit runtime overrides already resolved into report_cfg.
+    aligned.training.run_name = str(getattr(report_cfg.training, "run_name", aligned.training.run_name))
+    aligned.env.urllc_user_ratio_override = float(getattr(report_cfg.env, "urllc_user_ratio_override", -1.0))
+    aligned.env.urllc_poisson_rate = float(getattr(report_cfg.env, "urllc_poisson_rate", aligned.env.urllc_poisson_rate))
+    aligned.env.fixed_urllc_poisson_rate = bool(
+        getattr(report_cfg.env, "fixed_urllc_poisson_rate", aligned.env.fixed_urllc_poisson_rate)
+    )
+    aligned.env.urllc_poisson_rate_is_per_user = bool(
+        getattr(report_cfg.env, "urllc_poisson_rate_is_per_user", aligned.env.urllc_poisson_rate_is_per_user)
+    )
+    aligned.env.greedy_urllc_share_mode = str(
+        getattr(report_cfg.env, "greedy_urllc_share_mode", aligned.env.greedy_urllc_share_mode)
+    )
+    aligned.env.greedy_urllc_share_ratio = float(
+        getattr(report_cfg.env, "greedy_urllc_share_ratio", aligned.env.greedy_urllc_share_ratio)
+    )
+    aligned.training.experiment_line = target_exp
+    return aligned
+
+
 def _load_to_lambda(load: float) -> float:
     base_total_per_uav, base_poisson, fixed_lambda = _base_profile()
     if fixed_lambda:
@@ -399,6 +877,21 @@ def _normalize_baseline_mode(mode: str | None) -> str:
 
 
 def _greedy_baseline_mode(cfg: SRMAPPOConfig) -> str:
+    override = str(os.environ.get("SR_MAPPO_REPORT_GREEDY_POLICY_OVERRIDE", "") or "").strip().lower()
+    if override in {"global_frontier", "global_greedy"}:
+        return "global_frontier_greedy"
+    if override in {"throughput_only", "tp_only"}:
+        return "throughput_only_greedy"
+    if override in {"rate_loss_min", "global_rate_loss", "sumrate_minloss", "global_sumrate_minloss"}:
+        return "rate_loss_min_greedy"
+    if override in {"force_admit_minloss", "rate_loss_force_admit", "sumrate_force_admit"}:
+        return "force_admit_minloss_greedy"
+    if override in {"channel_only"}:
+        return "channel_only_greedy"
+    if override in {"myopic", "myopic_throughput"}:
+        return "myopic_throughput_greedy"
+    if override in {"hard_feasible", "hard_feasible_throughput"}:
+        return "hard_feasible_throughput_greedy"
     return _normalize_baseline_mode(getattr(cfg.training, "greedy_baseline_mode", "original"))
 
 
@@ -447,6 +940,23 @@ def _report_seed_base(load_idx: int, cfg: Optional[SRMAPPOConfig] = None) -> int
         return int(_REPORT_RUN_SEED_BASE)
     cfg = cfg or SRMAPPOConfig()
     return int(getattr(cfg.training, "train_seed", 42) + 1000)
+
+
+def _env_bool_override(name: str, default: bool) -> bool:
+    raw = str(os.environ.get(name, "") or "").strip().lower()
+    if not raw:
+        return bool(default)
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _env_int_override(name: str, default: int) -> int:
+    raw = str(os.environ.get(name, "") or "").strip()
+    if not raw:
+        return int(default)
+    try:
+        return int(raw)
+    except Exception:
+        return int(default)
 
 
 def _primary_checkpoint_preference(cfg: Optional[SRMAPPOConfig] = None) -> str:
@@ -996,6 +1506,91 @@ def _load_history_from_final(cfg: Optional[SRMAPPOConfig] = None, checkpoint_pat
     return []
 
 
+def _load_history_for_report(cfg: Optional[SRMAPPOConfig] = None, checkpoint_path: Optional[Path] = None) -> List[Dict]:
+    """Load training history for report-side diagnostics.
+
+    Prefer history embedded in the selected checkpoint (iter/best/latest). If absent,
+    fall back to *_final checkpoint history.
+    """
+    cfg = cfg or SRMAPPOConfig()
+    if checkpoint_path is not None:
+        path = Path(checkpoint_path)
+        if path.exists():
+            try:
+                payload = torch.load(path, map_location='cpu')
+                extra = payload.get('extra', {}) if isinstance(payload, dict) else {}
+                history = extra.get('history', []) or []
+                if history:
+                    return list(history)
+            except Exception:
+                pass
+    return _load_history_from_final(cfg, checkpoint_path=checkpoint_path)
+
+
+def plot_training_reward_debug(history: List[Dict]) -> Optional[Path]:
+    """Plot training-side reward/loss trends for fast/lite report visibility."""
+    if not history:
+        return None
+    iters: List[int] = []
+    rollout_reward: List[float] = []
+    eval_policy_score: List[float] = []
+    policy_loss: List[float] = []
+    value_loss: List[float] = []
+    entropy: List[float] = []
+
+    for rec in history:
+        if not isinstance(rec, dict):
+            continue
+        try:
+            it = int(rec.get('iteration', 0) or 0)
+        except Exception:
+            continue
+        if it <= 0:
+            continue
+        iters.append(it)
+        roll = rec.get('rollout', {}) if isinstance(rec.get('rollout', {}), dict) else {}
+        upd = rec.get('update', {}) if isinstance(rec.get('update', {}), dict) else {}
+        ev = rec.get('evaluation', {}) if isinstance(rec.get('evaluation', {}), dict) else {}
+        rollout_reward.append(float(roll.get('mean_reward', np.nan)))
+        eval_policy_score.append(float(ev.get('policy_score', np.nan)))
+        policy_loss.append(float(upd.get('policy_loss', np.nan)))
+        value_loss.append(float(upd.get('value_loss', np.nan)))
+        entropy.append(float(upd.get('entropy', np.nan)))
+
+    if not iters:
+        return None
+
+    x = np.asarray(iters, dtype=float)
+    fig, axes = plt.subplots(2, 2, figsize=(14.0, 8.0), constrained_layout=True)
+    axes = np.asarray(axes).reshape(2, 2)
+
+    def _plot(ax, y: List[float], title: str, ylabel: str, color: str):
+        arr = np.asarray(y, dtype=float)
+        mask = np.isfinite(arr) & np.isfinite(x)
+        if np.any(mask):
+            ax.plot(x[mask], arr[mask], color=color, marker='o', markersize=4, linewidth=1.8)
+        else:
+            ax.text(0.05, 0.1, "unavailable", transform=ax.transAxes, fontsize=9, color='tab:gray')
+        _style(ax, title, 'Iteration', ylabel)
+
+    _plot(axes[0, 0], rollout_reward, 'Training rollout mean reward', 'Reward', 'tab:orange')
+    _plot(axes[0, 1], eval_policy_score, 'Eval policy score', 'Score', 'tab:blue')
+    _plot(axes[1, 0], policy_loss, 'Policy loss', 'Loss', 'tab:red')
+    _plot(axes[1, 1], value_loss, 'Value loss (+ entropy)', 'Loss', 'tab:green')
+
+    # Overlay entropy on value-loss panel (secondary trend, same axis for simplicity).
+    ent = np.asarray(entropy, dtype=float)
+    mask_e = np.isfinite(ent) & np.isfinite(x)
+    if np.any(mask_e):
+        axes[1, 1].plot(x[mask_e], ent[mask_e], color='tab:purple', linestyle='--', linewidth=1.4, label='entropy')
+        axes[1, 1].legend(loc='best', fontsize=8, frameon=False)
+
+    path = RESULTS_DIR / 'training_reward_debug.png'
+    fig.savefig(path, dpi=220)
+    plt.close(fig)
+    return path
+
+
 def _compute_cell_edge_served_ratio(sys_cfg, topology, best_uav_per_user, embb_rates):
     embb_rates = np.asarray(embb_rates, dtype=float)
     if topology is None or embb_rates.size == 0:
@@ -1019,6 +1614,15 @@ def _compute_embb_min_rate_satisfaction_ratio(embb_rates, min_rate_bps: float) -
     if float(min_rate_bps) <= 0.0:
         return float(np.mean(embb_rates > 0.0))
     return float(np.mean(embb_rates >= float(min_rate_bps)))
+
+
+def _compute_embb_min_rate_satisfied_user_count(embb_rates, min_rate_bps: float) -> float:
+    embb_rates = np.asarray(embb_rates, dtype=float)
+    if embb_rates.size == 0:
+        return 0.0
+    if float(min_rate_bps) <= 0.0:
+        return float(np.count_nonzero(embb_rates > 0.0))
+    return float(np.count_nonzero(embb_rates >= float(min_rate_bps)))
 
 
 def _compute_cell_edge_min_rate_satisfaction_ratio(
@@ -1266,7 +1870,7 @@ def _policy_actions(env, model, observations, actor_hidden, critic_hidden):
         joint_actions[agent_id] = HybridAction(
             mode=int(output.mode[idx].item()),
             packet_option=int(output.packet_option[idx].item()),
-            power_delta=float(output.power_delta[idx].item()),
+            power_delta=0.0,
             embb_owner_option=int(output.embb_owner_option[idx].item()),
             embb_power_delta=float(output.embb_power_delta[idx].item()),
         )
@@ -1362,11 +1966,45 @@ def _throughput_feasible_actions(env, observations):
     return actions, diagnostics
 
 
+def _rate_loss_min_actions(env, observations):
+    """Pure-sumrate owner baseline + minimum global eMBB-loss admit baseline."""
+
+    actions = {}
+    diagnostics = {}
+    for agent_id, obs in observations.items():
+        action, debug = env.rate_loss_min_greedy_action(obs)
+        actions[agent_id] = action
+        diagnostics[agent_id] = debug
+    return actions, diagnostics
+
+
+def _force_admit_minloss_actions(env, observations):
+    """Pure-sumrate owner baseline + no-KEEP hard-feasible min-loss admit baseline."""
+
+    actions = {}
+    diagnostics = {}
+    for agent_id, obs in observations.items():
+        action, debug = env.force_admit_minloss_greedy_action(obs)
+        actions[agent_id] = action
+        diagnostics[agent_id] = debug
+    return actions, diagnostics
+
+
 def _hard_feasible_throughput_actions(env, observations):
     actions = {}
     diagnostics = {}
     for agent_id, obs in observations.items():
         action, debug = env.hard_feasible_throughput_greedy_action(obs)
+        actions[agent_id] = action
+        diagnostics[agent_id] = debug
+    return actions, diagnostics
+
+
+def _global_frontier_actions(env, observations):
+    actions = {}
+    diagnostics = {}
+    for agent_id, obs in observations.items():
+        action, debug = env.global_frontier_greedy_action(obs)
         actions[agent_id] = action
         diagnostics[agent_id] = debug
     return actions, diagnostics
@@ -1400,6 +2038,7 @@ def _greedy_summary_from_result(result: Dict, sys_cfg, embb_cfg=None) -> Dict:
     embb_service_ratio = float(metrics['embb_served_users'] / max(sys_cfg.num_embb_users, 1))
     embb_positive_rate_ratio = float(embb_service_ratio)
     embb_min_rate_satisfaction_ratio = _compute_embb_min_rate_satisfaction_ratio(embb_rates, min_rate_bps)
+    embb_min_rate_satisfied_user_count = _compute_embb_min_rate_satisfied_user_count(embb_rates, min_rate_bps)
     cell_edge_min_rate_satisfaction_ratio = _compute_cell_edge_min_rate_satisfaction_ratio(
         sys_cfg,
         allocation.get('topology'),
@@ -1416,15 +2055,38 @@ def _greedy_summary_from_result(result: Dict, sys_cfg, embb_cfg=None) -> Dict:
     )
     return {
         'embb_rate': float(metrics['embb_total_rate']),
+        'embb_rate_after_local_puncture_deduction': float(
+            metrics.get(
+                'embb_total_rate_after_puncture_deduction',
+                metrics.get('embb_rate_after_local_puncture_deduction', metrics['embb_total_rate']),
+            )
+        ),
+        'embb_total_rate_after_puncture_deduction': float(
+            metrics.get(
+                'embb_total_rate_after_puncture_deduction',
+                metrics.get('embb_rate_after_local_puncture_deduction', metrics['embb_total_rate']),
+            )
+        ),
         'embb_user_rate': float(metrics['embb_user_rate_mean']),
+        'embb_user_rate_mean_after_puncture_deduction': float(
+            metrics.get('embb_user_rate_mean_after_puncture_deduction', metrics['embb_user_rate_mean'])
+        ),
         'embb_service_ratio': embb_service_ratio,
+        'embb_service_ratio_after_puncture_deduction': float(
+            metrics.get('embb_service_ratio_after_puncture_deduction', embb_service_ratio)
+        ),
         'embb_positive_rate_ratio': embb_positive_rate_ratio,
         'embb_min_rate_satisfaction_ratio': float(embb_min_rate_satisfaction_ratio),
+        'embb_min_rate_satisfied_user_count': float(embb_min_rate_satisfied_user_count),
         'urllc_admission': float(metrics['urllc_admission_rate']),
         'admitted_urllc_reliability': admitted_reliability,
         'urllc_reliability': admitted_reliability,
         'effective_urllc_success_over_arrivals': effective_success,
         'empty_admission_case': empty_admission_case,
+        'effective_lambda_per_user': float(metrics.get('effective_lambda_per_user', 0.0)),
+        'effective_lambda_per_user_per_minislot': float(metrics.get('effective_lambda_per_user_per_minislot', 0.0)),
+        'expected_total_arrivals_per_minislot': float(metrics.get('expected_total_arrivals_per_minislot', 0.0)),
+        'expected_total_arrivals_per_episode': float(metrics.get('expected_total_arrivals_per_episode', 0.0)),
         'active_packets': active_packets,
         'scheduled_packets': scheduled_packets,
         'overlay_count': float(metrics.get('overlay_count', 0.0)),
@@ -1570,8 +2232,12 @@ def run_greedy_sweep(loads: List[float], episodes_per_load: int) -> Tuple[Dict, 
     base_sys, base_urllc, base_embb, base_algo, base_sim = _build_main_like_configs()
     report_cfg = SRMAPPOConfig()
     scalar_keys = [
-        'embb_rate', 'embb_user_rate', 'embb_service_ratio', 'embb_positive_rate_ratio', 'embb_min_rate_satisfaction_ratio', 'urllc_admission',
+        'embb_rate', 'embb_rate_after_local_puncture_deduction', 'embb_total_rate_after_puncture_deduction',
+        'embb_user_rate', 'embb_user_rate_mean_after_puncture_deduction',
+        'embb_service_ratio', 'embb_service_ratio_after_puncture_deduction', 'embb_positive_rate_ratio', 'embb_min_rate_satisfaction_ratio', 'embb_min_rate_satisfied_user_count', 'urllc_admission',
         'admitted_urllc_reliability', 'urllc_reliability', 'effective_urllc_success_over_arrivals', 'empty_admission_case',
+        'effective_lambda_per_user', 'effective_lambda_per_user_per_minislot',
+        'expected_total_arrivals_per_minislot', 'expected_total_arrivals_per_episode',
         'active_packets', 'scheduled_packets', 'total_power', 'embb_power', 'urllc_power',
         'overlay_ratio', 'puncture_ratio', 'overlay_selection_ratio', 'puncture_selection_ratio',
         'embb_only_fraction', 'avg_puncture_loss',
@@ -1610,7 +2276,7 @@ def run_greedy_sweep(loads: List[float], episodes_per_load: int) -> Tuple[Dict, 
         metrics['loads'].append(float(load))
         metrics['lambda'].append(_load_to_lambda(load))
         for key in scalar_keys:
-            metrics[key].append(_safe_mean([episode.get(key, np.nan) for episode in episodes], default=np.nan))
+            metrics[key].append(_episode_scalar_aggregate(episodes, key, default=np.nan))
         for key in vector_keys:
             metrics[key].append(np.mean(np.stack([episode[key] for episode in episodes]), axis=0))
     _report_timing_log(f"run_greedy_sweep loads={len(loads)} episodes_per_load={episodes_per_load} sec={perf_counter() - sweep_start:.3f}")
@@ -1674,6 +2340,8 @@ def run_env_episode(
     use_greedy: bool = False,
     greedy_policy: str = "reference",
     cache_tag: str = "",
+    reuse_static_context: bool = False,
+    reset_count_contribution: float = 1.0,
 ) -> Dict:
     if env is None:
         raise ValueError("run_env_episode received env=None. Check greedy/mappo env initialization in report timeslot/dense paths.")
@@ -1701,6 +2369,7 @@ def run_env_episode(
     previous_fallback = bool(getattr(env.rl_cfg.shield, "enable_greedy_fallback", False))
     previous_mode_correction = bool(getattr(env.rl_cfg.shield, "allow_mode_correction", False))
     previous_training_progress = float(getattr(env, "training_progress_frac", 1.0))
+    previous_lightweight_obs_mode = bool(getattr(env, "_lightweight_obs_mode", False))
     if model is not None:
         setattr(
             env,
@@ -1708,10 +2377,11 @@ def run_env_episode(
             bool(getattr(model, "phase_a_embb_power_enabled", getattr(env.rl_cfg.env, "allow_phase_a_embb_power_adjustment", False))),
         )
     env.rl_cfg.env.include_greedy_reference_in_obs = bool(use_greedy and normalized_greedy_policy == "reference")
+    env._lightweight_obs_mode = bool(use_greedy)
     env.rl_cfg.shield.enable_greedy_fallback = False
     env.rl_cfg.shield.allow_mode_correction = False
     env.training_progress_frac = 1.0
-    observations, _info = env.reset(seed=seed)
+    observations, _info = env.reset(seed=seed, reuse_static_context=bool(reuse_static_context))
     actor_hidden = critic_hidden = None
     if not use_greedy and model is not None:
         actor_hidden, critic_hidden = model.initial_state(batch_size=len(env.agent_ids), device=model.power_log_std.device)
@@ -1764,6 +2434,68 @@ def run_env_episode(
     greedy_noop_available_sum = 0.0
     greedy_noop_better_sum = 0.0
     greedy_requires_feasible_only = 0.0
+    greedy_hf_raw_count_sum = 0.0
+    greedy_hf_admissible_count_sum = 0.0
+    greedy_hf_evaluated_count_sum = 0.0
+    greedy_hf_feasible_count_sum = 0.0
+    greedy_hf_selected_count_sum = 0.0
+    greedy_hf_reject_gate_assoc_sum = 0.0
+    greedy_hf_reject_gate_queue_sum = 0.0
+    greedy_hf_reject_gate_mode_sum = 0.0
+    greedy_hf_reject_gate_owner_sum = 0.0
+    greedy_hf_reject_gate_rb_local_sum = 0.0
+    greedy_hf_reject_mode_overlay_rel_fail_sum = 0.0
+    greedy_hf_reject_mode_overlay_sic_fail_sum = 0.0
+    greedy_hf_reject_mode_gain_ratio_fail_sum = 0.0
+    greedy_hf_reject_mode_owner_pool_missing_sum = 0.0
+    greedy_hf_reject_mode_owner_unresolved_due_to_mode_fail_sum = 0.0
+    greedy_hf_reject_mode_puncture_rel_fail_sum = 0.0
+    greedy_hf_reject_mode_puncture_sic_fail_sum = 0.0
+    greedy_hf_reject_mode_puncture_owner_missing_sum = 0.0
+    greedy_hf_reject_owner_missing_sum = 0.0
+    greedy_hf_reject_owner_mismatch_sum = 0.0
+    greedy_hf_gate_overlay_rel_fail_margin_sum = 0.0
+    greedy_hf_gate_overlay_sic_fail_margin_db_sum = 0.0
+    greedy_hf_gate_puncture_rel_fail_margin_sum = 0.0
+    greedy_hf_gate_target_reliability_sum = 0.0
+    greedy_hf_gate_target_sic_db_sum = 0.0
+    greedy_hf_gate_overlay_rel_fail_snir_db_sum = 0.0
+    greedy_hf_gate_overlay_sic_fail_post_sic_db_sum = 0.0
+    greedy_hf_gate_puncture_rel_fail_snir_db_sum = 0.0
+    greedy_hf_overlay_sic_trace_pre_sinr_db_sum = 0.0
+    greedy_hf_overlay_sic_trace_post_sinr_db_sum = 0.0
+    greedy_hf_overlay_sic_trace_noise_power_sum = 0.0
+    greedy_hf_overlay_sic_trace_intercell_interference_sum = 0.0
+    greedy_hf_overlay_sic_trace_local_interference_sum = 0.0
+    greedy_hf_overlay_sic_trace_residual_interference_sum = 0.0
+    greedy_hf_overlay_sic_trace_residual_ratio_sum = 0.0
+    greedy_hf_overlay_presinr_raw_lt_m10_sum = 0.0
+    greedy_hf_overlay_presinr_raw_m10_m6_sum = 0.0
+    greedy_hf_overlay_presinr_raw_m6_m2_sum = 0.0
+    greedy_hf_overlay_presinr_raw_ge_m2_sum = 0.0
+    greedy_hf_overlay_presinr_kept_low_ratio_sum = 0.0
+    greedy_hf_overlay_presinr_eval_low_ratio_sum = 0.0
+    greedy_hf_quality_priority_enabled_sum = 0.0
+    greedy_hf_quality_raw_high_sum = 0.0
+    greedy_hf_quality_raw_borderline_sum = 0.0
+    greedy_hf_quality_raw_risk_sum = 0.0
+    greedy_hf_quality_kept_high_sum = 0.0
+    greedy_hf_quality_kept_borderline_sum = 0.0
+    greedy_hf_quality_kept_risk_sum = 0.0
+    greedy_hf_quality_eval_high_sum = 0.0
+    greedy_hf_quality_eval_borderline_sum = 0.0
+    greedy_hf_quality_eval_risk_sum = 0.0
+    greedy_hf_quality_selected_high_sum = 0.0
+    greedy_hf_quality_selected_borderline_sum = 0.0
+    greedy_hf_quality_selected_risk_sum = 0.0
+    greedy_hf_overlay_blacklist_cell_ratio_sum = 0.0
+    greedy_hf_overlay_blacklist_candidate_block_ratio_sum = 0.0
+    greedy_hf_overlay_blacklist_saved_mode_fail_ratio_sum = 0.0
+    greedy_hf_overlay_only_rb_reservation_enabled_sum = 0.0
+    greedy_hf_overlay_only_rb_reservation_ratio_sum = 0.0
+    greedy_hf_overlay_only_rb_reserved_count_sum = 0.0
+    greedy_hf_overlay_only_rb_reserved_cell_ratio_sum = 0.0
+    greedy_hf_overlay_only_rb_mode_block_ratio_sum = 0.0
     phase_a_embb_power_anchor_binding_count = 0
     phase_a_embb_power_anchor_binding_denom = 0
     trace = []
@@ -1801,6 +2533,8 @@ def run_env_episode(
                 joint_actions = _channel_only_actions(env, current_obs)
             elif normalized_greedy_policy in {"hard_feasible", "hard_feasible_throughput"}:
                 joint_actions, greedy_debug = _hard_feasible_throughput_actions(env, current_obs)
+            elif normalized_greedy_policy in {"global_frontier", "global_greedy"}:
+                joint_actions, greedy_debug = _global_frontier_actions(env, current_obs)
             elif normalized_greedy_policy == "throughput_feasible":
                 joint_actions, greedy_debug = _throughput_feasible_actions(env, current_obs)
             elif normalized_greedy_policy == "throughput_biased":
@@ -1809,6 +2543,10 @@ def run_env_episode(
                 joint_actions, greedy_debug = _myopic_throughput_actions(env, current_obs)
             elif normalized_greedy_policy == "throughput_only":
                 joint_actions, greedy_debug = _throughput_only_actions(env, current_obs)
+            elif normalized_greedy_policy in {"rate_loss_min", "global_rate_loss", "sumrate_minloss", "global_sumrate_minloss"}:
+                joint_actions, greedy_debug = _rate_loss_min_actions(env, current_obs)
+            elif normalized_greedy_policy in {"force_admit_minloss", "rate_loss_force_admit", "sumrate_force_admit"}:
+                joint_actions, greedy_debug = _force_admit_minloss_actions(env, current_obs)
             else:
                 joint_actions = _greedy_actions(env, current_obs)
         else:
@@ -1843,6 +2581,78 @@ def run_env_episode(
                 greedy_requires_feasible_only = max(
                     greedy_requires_feasible_only,
                     float(debug.get("current_env_requires_feasible_admission_only", 0.0)),
+                )
+                greedy_hf_raw_count_sum += float(debug.get("greedy_hf_raw_count", 0.0))
+                greedy_hf_admissible_count_sum += float(debug.get("greedy_hf_admissible_count", 0.0))
+                greedy_hf_evaluated_count_sum += float(debug.get("greedy_hf_evaluated_count", 0.0))
+                greedy_hf_feasible_count_sum += float(debug.get("greedy_hf_feasible_count", 0.0))
+                greedy_hf_selected_count_sum += float(debug.get("greedy_hf_selected_count", 0.0))
+                greedy_hf_reject_gate_assoc_sum += float(debug.get("greedy_hf_reject_by_gate_association", 0.0))
+                greedy_hf_reject_gate_queue_sum += float(debug.get("greedy_hf_reject_by_gate_queue_active", 0.0))
+                greedy_hf_reject_gate_mode_sum += float(debug.get("greedy_hf_reject_by_gate_mode_admissible", 0.0))
+                greedy_hf_reject_gate_owner_sum += float(debug.get("greedy_hf_reject_by_gate_owner_admissible", 0.0))
+                greedy_hf_reject_gate_rb_local_sum += float(debug.get("greedy_hf_reject_by_gate_rb_local", 0.0))
+                greedy_hf_reject_mode_overlay_rel_fail_sum += float(debug.get("greedy_hf_reject_by_mode_overlay_rel_fail", 0.0))
+                greedy_hf_reject_mode_overlay_sic_fail_sum += float(debug.get("greedy_hf_reject_by_mode_overlay_sic_fail", 0.0))
+                greedy_hf_reject_mode_gain_ratio_fail_sum += float(debug.get("greedy_hf_reject_by_mode_gain_ratio_fail", 0.0))
+                greedy_hf_reject_mode_owner_pool_missing_sum += float(debug.get("greedy_hf_reject_by_mode_owner_pool_missing", debug.get("greedy_hf_reject_by_mode_overlay_owner_missing", 0.0)))
+                greedy_hf_reject_mode_owner_unresolved_due_to_mode_fail_sum += float(debug.get("greedy_hf_reject_by_mode_owner_unresolved_due_to_mode_fail", 0.0))
+                greedy_hf_reject_mode_puncture_rel_fail_sum += float(debug.get("greedy_hf_reject_by_mode_puncture_rel_fail", 0.0))
+                greedy_hf_reject_mode_puncture_sic_fail_sum += float(debug.get("greedy_hf_reject_by_mode_puncture_sic_fail", 0.0))
+                greedy_hf_reject_mode_puncture_owner_missing_sum += float(debug.get("greedy_hf_reject_by_mode_puncture_owner_missing", 0.0))
+                greedy_hf_reject_owner_missing_sum += float(debug.get("greedy_hf_reject_by_owner_missing", 0.0))
+                greedy_hf_reject_owner_mismatch_sum += float(debug.get("greedy_hf_reject_by_owner_mismatch", 0.0))
+                greedy_hf_gate_overlay_rel_fail_margin_sum += float(debug.get("greedy_hf_gate_overlay_rel_fail_margin_mean", 0.0))
+                greedy_hf_gate_overlay_sic_fail_margin_db_sum += float(debug.get("greedy_hf_gate_overlay_sic_fail_margin_db_mean", 0.0))
+                greedy_hf_gate_puncture_rel_fail_margin_sum += float(debug.get("greedy_hf_gate_puncture_rel_fail_margin_mean", 0.0))
+                greedy_hf_gate_target_reliability_sum += float(debug.get("greedy_hf_gate_target_reliability", 0.0))
+                greedy_hf_gate_target_sic_db_sum += float(debug.get("greedy_hf_gate_target_sic_snir_db", 0.0))
+                greedy_hf_gate_overlay_rel_fail_snir_db_sum += float(debug.get("greedy_hf_gate_overlay_rel_fail_snir_db_mean", 0.0))
+                greedy_hf_gate_overlay_sic_fail_post_sic_db_sum += float(debug.get("greedy_hf_gate_overlay_sic_fail_post_sic_db_mean", 0.0))
+                greedy_hf_gate_puncture_rel_fail_snir_db_sum += float(debug.get("greedy_hf_gate_puncture_rel_fail_snir_db_mean", 0.0))
+                greedy_hf_overlay_sic_trace_pre_sinr_db_sum += float(debug.get("greedy_hf_overlay_sic_trace_pre_sinr_db_mean", 0.0))
+                greedy_hf_overlay_sic_trace_post_sinr_db_sum += float(debug.get("greedy_hf_overlay_sic_trace_post_sinr_db_mean", 0.0))
+                greedy_hf_overlay_sic_trace_noise_power_sum += float(debug.get("greedy_hf_overlay_sic_trace_noise_power_mean", 0.0))
+                greedy_hf_overlay_sic_trace_intercell_interference_sum += float(debug.get("greedy_hf_overlay_sic_trace_intercell_interference_mean", 0.0))
+                greedy_hf_overlay_sic_trace_local_interference_sum += float(debug.get("greedy_hf_overlay_sic_trace_local_interference_mean", 0.0))
+                greedy_hf_overlay_sic_trace_residual_interference_sum += float(debug.get("greedy_hf_overlay_sic_trace_residual_sic_interference_mean", 0.0))
+                greedy_hf_overlay_sic_trace_residual_ratio_sum += float(debug.get("greedy_hf_overlay_sic_trace_sic_residual_ratio", 0.0))
+                greedy_hf_overlay_presinr_raw_lt_m10_sum += float(debug.get("greedy_hf_overlay_presinr_raw_lt_m10", 0.0))
+                greedy_hf_overlay_presinr_raw_m10_m6_sum += float(debug.get("greedy_hf_overlay_presinr_raw_m10_m6", 0.0))
+                greedy_hf_overlay_presinr_raw_m6_m2_sum += float(debug.get("greedy_hf_overlay_presinr_raw_m6_m2", 0.0))
+                greedy_hf_overlay_presinr_raw_ge_m2_sum += float(debug.get("greedy_hf_overlay_presinr_raw_ge_m2", 0.0))
+                greedy_hf_overlay_presinr_kept_low_ratio_sum += float(debug.get("greedy_hf_overlay_presinr_kept_low_ratio", 0.0))
+                greedy_hf_overlay_presinr_eval_low_ratio_sum += float(debug.get("greedy_hf_overlay_presinr_eval_low_ratio", 0.0))
+                greedy_hf_quality_priority_enabled_sum += float(debug.get("greedy_hf_quality_priority_enabled", 0.0))
+                greedy_hf_quality_raw_high_sum += float(debug.get("greedy_hf_quality_raw_high", 0.0))
+                greedy_hf_quality_raw_borderline_sum += float(debug.get("greedy_hf_quality_raw_borderline", 0.0))
+                greedy_hf_quality_raw_risk_sum += float(debug.get("greedy_hf_quality_raw_risk", 0.0))
+                greedy_hf_quality_kept_high_sum += float(debug.get("greedy_hf_quality_kept_high", 0.0))
+                greedy_hf_quality_kept_borderline_sum += float(debug.get("greedy_hf_quality_kept_borderline", 0.0))
+                greedy_hf_quality_kept_risk_sum += float(debug.get("greedy_hf_quality_kept_risk", 0.0))
+                greedy_hf_quality_eval_high_sum += float(debug.get("greedy_hf_quality_eval_high", 0.0))
+                greedy_hf_quality_eval_borderline_sum += float(debug.get("greedy_hf_quality_eval_borderline", 0.0))
+                greedy_hf_quality_eval_risk_sum += float(debug.get("greedy_hf_quality_eval_risk", 0.0))
+                greedy_hf_quality_selected_high_sum += float(debug.get("greedy_hf_quality_selected_high", 0.0))
+                greedy_hf_quality_selected_borderline_sum += float(debug.get("greedy_hf_quality_selected_borderline", 0.0))
+                greedy_hf_quality_selected_risk_sum += float(debug.get("greedy_hf_quality_selected_risk", 0.0))
+                greedy_hf_overlay_blacklist_cell_ratio_sum += float(debug.get("greedy_hf_overlay_blacklist_cell_ratio", 0.0))
+                greedy_hf_overlay_blacklist_candidate_block_ratio_sum += float(debug.get("greedy_hf_overlay_blacklist_candidate_block_ratio", 0.0))
+                greedy_hf_overlay_blacklist_saved_mode_fail_ratio_sum += float(debug.get("greedy_hf_overlay_blacklist_saved_mode_fail_ratio", 0.0))
+                greedy_hf_overlay_only_rb_reservation_enabled_sum += float(
+                    debug.get("greedy_hf_overlay_only_rb_reservation_enabled", 0.0)
+                )
+                greedy_hf_overlay_only_rb_reservation_ratio_sum += float(
+                    debug.get("greedy_hf_overlay_only_rb_reservation_ratio", 0.0)
+                )
+                greedy_hf_overlay_only_rb_reserved_count_sum += float(
+                    debug.get("greedy_hf_overlay_only_rb_reserved_count", 0.0)
+                )
+                greedy_hf_overlay_only_rb_reserved_cell_ratio_sum += float(
+                    debug.get("greedy_hf_overlay_only_rb_reserved_cell_ratio", 0.0)
+                )
+                greedy_hf_overlay_only_rb_mode_block_ratio_sum += float(
+                    debug.get("greedy_hf_overlay_only_rb_mode_block_ratio", 0.0)
                 )
         _action_resolve_t0 = perf_counter()
         if planning_phase:
@@ -1926,7 +2736,11 @@ def run_env_episode(
                 joint_rewrite_count += 1
 
         _env_step_t0 = perf_counter()
-        observations, rewards, dones, infos = env.step(joint_actions)
+        observations, rewards, dones, infos = env.step(
+            joint_actions,
+            prebuilt_observations=current_obs,
+            pre_resolved_actions=resolved,
+        )
         env_step_sec_total += float(perf_counter() - _env_step_t0)
         done = all(dones.values())
         if collect_trace and not planning_phase:
@@ -1936,6 +2750,7 @@ def run_env_episode(
                 for agent_id in env.agent_ids
             ]
             trace_meta = dict(current_obs[env.agent_ids[0]].metadata or {})
+            cell_debug = dict(greedy_debug.get(env.agent_ids[0], {}) or {})
             trace.append({
                 'cell_index': cell_index,
                 'minislot': minislot,
@@ -1953,6 +2768,26 @@ def run_env_episode(
                 'embb_rate': float(summary['embb_total_rate']),
                 'total_power': float(summary['total_power']),
                 'utility_gap': float(np.mean(utility_gaps)) if utility_gaps else 0.0,
+                'raw_candidate_count': float(cell_debug.get('greedy_hf_raw_count', 0.0)),
+                'admissible_candidate_count': float(cell_debug.get('greedy_hf_admissible_count', 0.0)),
+                'evaluated_candidate_count': float(cell_debug.get('greedy_hf_evaluated_count', 0.0)),
+                'feasible_candidate_count': float(cell_debug.get('greedy_hf_feasible_count', 0.0)),
+                'selected_mode': float(cell_debug.get('selected_mode', 0.0)),
+                'selected_reliability': float(cell_debug.get('selected_reliability', 0.0)),
+                'selected_gain_ratio': float(cell_debug.get('selected_gain_ratio', 0.0)),
+                'selected_quality_tier': float(cell_debug.get('selected_quality_tier', 0.0)),
+                'top1_mode': float(cell_debug.get('greedy_hf_top1_mode', 0.0)),
+                'top2_mode': float(cell_debug.get('greedy_hf_top2_mode', 0.0)),
+                'top12_global_loss_gap': float(cell_debug.get('greedy_hf_top12_global_loss_gap', 0.0)),
+                'quality_raw_high': float(cell_debug.get('greedy_hf_quality_raw_high', 0.0)),
+                'quality_raw_borderline': float(cell_debug.get('greedy_hf_quality_raw_borderline', 0.0)),
+                'quality_raw_risk': float(cell_debug.get('greedy_hf_quality_raw_risk', 0.0)),
+                'quality_selected_high': float(cell_debug.get('greedy_hf_quality_selected_high', 0.0)),
+                'quality_selected_borderline': float(cell_debug.get('greedy_hf_quality_selected_borderline', 0.0)),
+                'quality_selected_risk': float(cell_debug.get('greedy_hf_quality_selected_risk', 0.0)),
+                'mode_overlay_rel_fail': float(cell_debug.get('greedy_hf_reject_by_mode_overlay_rel_fail', 0.0)),
+                'mode_gain_ratio_fail': float(cell_debug.get('greedy_hf_reject_by_mode_gain_ratio_fail', 0.0)),
+                'mode_puncture_rel_fail': float(cell_debug.get('greedy_hf_reject_by_mode_puncture_rel_fail', 0.0)),
             })
 
     summary = env.summarize_episode()
@@ -1968,6 +2803,12 @@ def run_env_episode(
     embb_min_rate_bps = float(getattr(env.embb_cfg, 'min_rate_per_user_bps', 0.0) or 0.0)
     embb_positive_rate_ratio = float(summary['embb_service_ratio'])
     embb_min_rate_satisfaction_ratio = _compute_embb_min_rate_satisfaction_ratio(embb_rates, embb_min_rate_bps)
+    embb_min_rate_satisfied_user_count = _compute_embb_min_rate_satisfied_user_count(embb_rates, embb_min_rate_bps)
+    embb_rates_eff = np.asarray(summary.get('embb_user_rates_after_puncture_deduction', []), dtype=float)
+    embb_min_rate_satisfied_user_count_after_puncture_deduction = _compute_embb_min_rate_satisfied_user_count(
+        embb_rates_eff,
+        embb_min_rate_bps,
+    )
     cell_edge_min_rate_satisfaction_ratio = _compute_cell_edge_min_rate_satisfaction_ratio(
         env.sys_cfg,
         env.last_topology,
@@ -1979,6 +2820,7 @@ def run_env_episode(
     env.rl_cfg.shield.enable_greedy_fallback = previous_fallback
     env.rl_cfg.shield.allow_mode_correction = previous_mode_correction
     env.training_progress_frac = previous_training_progress
+    env._lightweight_obs_mode = previous_lightweight_obs_mode
     # IMPORTANT: pass through the full `env.summarize_episode()` payload so fast-debug scalar_keys can be
     # plotted reliably (Phase-A suppress reasons, intercell step penalty components, load=10 diagnostics, etc.).
     result = {
@@ -1999,6 +2841,18 @@ def run_env_episode(
         'apply_joint_reliability_rewrite': float(summary.get('apply_joint_reliability_rewrite', float(bool(env.rl_cfg.shield.apply_joint_reliability_rewrite)))),
         'enable_greedy_fallback': float(summary.get('enable_greedy_fallback', float(bool(env.rl_cfg.shield.enable_greedy_fallback)))),
         'embb_rate': float(summary['embb_total_rate']),
+        'embb_rate_after_local_puncture_deduction': float(
+            summary.get(
+                'embb_total_rate_after_puncture_deduction',
+                summary.get('embb_rate_after_local_puncture_deduction', summary['embb_total_rate']),
+            )
+        ),
+        'embb_total_rate_after_puncture_deduction': float(
+            summary.get(
+                'embb_total_rate_after_puncture_deduction',
+                summary.get('embb_rate_after_local_puncture_deduction', summary['embb_total_rate']),
+            )
+        ),
         # Same-scenario eMBB baseline before URLLC puncture/admission impact.
         'embb_rate_pre_urllc_admission': float(
             summary.get(
@@ -2007,12 +2861,30 @@ def run_env_episode(
             )
         ),
         'embb_user_rate': float(summary['embb_user_rate_mean']),
+        'embb_user_rate_mean_after_puncture_deduction': float(
+            summary.get('embb_user_rate_mean_after_puncture_deduction', summary['embb_user_rate_mean'])
+        ),
         'embb_service_ratio': float(summary['embb_service_ratio']),
+        'embb_service_ratio_after_puncture_deduction': float(
+            summary.get('embb_service_ratio_after_puncture_deduction', summary['embb_service_ratio'])
+        ),
         'embb_positive_rate_ratio': embb_positive_rate_ratio,
         'embb_min_rate_satisfaction_ratio': float(embb_min_rate_satisfaction_ratio),
+        'embb_min_rate_satisfied_user_count': float(embb_min_rate_satisfied_user_count),
+        'embb_min_rate_satisfied_user_count_after_puncture_deduction': float(
+            embb_min_rate_satisfied_user_count_after_puncture_deduction
+            if embb_rates_eff.size > 0 else (
+                float(summary.get('embb_min_rate_satisfaction_after_puncture_deduction', embb_min_rate_satisfaction_ratio))
+                * float(summary.get('embb_user_count', 0.0))
+            )
+        ),
         'embb_user_count': float(summary.get('embb_user_count', 0.0)),
         'urllc_user_count': float(summary.get('urllc_user_count', 0.0)),
         'embb_urllc_user_ratio': float(summary.get('embb_urllc_user_ratio', 0.0)),
+        'effective_lambda_per_user': float(summary.get('effective_lambda_per_user', 0.0)),
+        'effective_lambda_per_user_per_minislot': float(summary.get('effective_lambda_per_user_per_minislot', 0.0)),
+        'expected_total_arrivals_per_minislot': float(summary.get('expected_total_arrivals_per_minislot', 0.0)),
+        'expected_total_arrivals_per_episode': float(summary.get('expected_total_arrivals_per_episode', 0.0)),
         'urllc_admission': float(summary['urllc_admission_rate']),
         'admitted_urllc_reliability': float(
             summary.get('admitted_urllc_reliability', summary.get('urllc_success_rate', np.nan))
@@ -2278,9 +3150,11 @@ def run_env_episode(
             if getattr(env, "phase0_snapshot_owner_per_uav_rb", None) is not None else None
         ),
         'episode_sec': float(perf_counter() - episode_start),
+        'report_episode_seed': float(seed),
         'profile_action_select_sec': float(action_select_sec_total),
         'profile_action_resolve_sec': float(action_resolve_sec_total),
         'profile_env_step_sec': float(env_step_sec_total),
+        'virtual_slot_reset_count_per_episode': float(reset_count_contribution),
     }
     result.update({
         'phase_a_embb_power_pre_clip_mean_delta': float(summary.get('phase_a_embb_power_pre_clip_mean_delta', 0.0)),
@@ -2306,10 +3180,12 @@ def run_env_episode(
         'phaseA_pow_pre_vs_final_sign_consistency': float(summary.get('phaseA_pow_pre_vs_final_sign_consistency', 0.0)),
         'phaseA_pow_effective_nonzero_ratio': float(summary.get('phaseA_pow_effective_nonzero_ratio', 0.0)),
     })
-    if use_greedy and normalized_greedy_policy in {"hard_feasible", "hard_feasible_throughput", "throughput_only", "throughput_biased", "myopic", "myopic_throughput"}:
+    if use_greedy and normalized_greedy_policy in {"hard_feasible", "hard_feasible_throughput", "global_frontier", "global_greedy", "throughput_only", "throughput_biased", "myopic", "myopic_throughput"}:
         decision_denom = max(greedy_phase_a_decisions, 1)
         if normalized_greedy_policy in {"hard_feasible", "hard_feasible_throughput"}:
             baseline_key = "hard_feasible_throughput_greedy"
+        elif normalized_greedy_policy in {"global_frontier", "global_greedy"}:
+            baseline_key = "global_frontier_greedy"
         elif normalized_greedy_policy == "throughput_biased":
             baseline_key = "throughput_biased_greedy"
         elif normalized_greedy_policy == "throughput_only":
@@ -2339,6 +3215,81 @@ def run_env_episode(
             'greedy_noop_available_ratio': float(greedy_noop_available_sum / decision_denom),
             'greedy_noop_better_ratio': float(greedy_noop_better_sum / decision_denom),
             'greedy_requires_feasible_admission_only': float(greedy_requires_feasible_only),
+            'greedy_hf_raw_count': float(greedy_hf_raw_count_sum / decision_denom),
+            'greedy_hf_admissible_count': float(greedy_hf_admissible_count_sum / decision_denom),
+            'greedy_hf_evaluated_count': float(greedy_hf_evaluated_count_sum / decision_denom),
+            'greedy_hf_feasible_count': float(greedy_hf_feasible_count_sum / decision_denom),
+            'greedy_hf_selected_count': float(greedy_hf_selected_count_sum / decision_denom),
+            'greedy_hf_reject_by_gate_association': float(greedy_hf_reject_gate_assoc_sum / decision_denom),
+            'greedy_hf_reject_by_gate_queue_active': float(greedy_hf_reject_gate_queue_sum / decision_denom),
+            'greedy_hf_reject_by_gate_mode_admissible': float(greedy_hf_reject_gate_mode_sum / decision_denom),
+            'greedy_hf_reject_by_gate_owner_admissible': float(greedy_hf_reject_gate_owner_sum / decision_denom),
+            'greedy_hf_reject_by_gate_rb_local': float(greedy_hf_reject_gate_rb_local_sum / decision_denom),
+            'greedy_hf_reject_by_mode_overlay_rel_fail': float(greedy_hf_reject_mode_overlay_rel_fail_sum / decision_denom),
+            'greedy_hf_reject_by_mode_overlay_sic_fail': float(greedy_hf_reject_mode_overlay_sic_fail_sum / decision_denom),
+            'greedy_hf_reject_by_mode_gain_ratio_fail': float(greedy_hf_reject_mode_gain_ratio_fail_sum / decision_denom),
+            'greedy_hf_reject_by_mode_owner_pool_missing': float(greedy_hf_reject_mode_owner_pool_missing_sum / decision_denom),
+            'greedy_hf_reject_by_mode_owner_unresolved_due_to_mode_fail': float(
+                greedy_hf_reject_mode_owner_unresolved_due_to_mode_fail_sum / decision_denom
+            ),
+            'greedy_hf_reject_by_mode_overlay_owner_missing': float(greedy_hf_reject_mode_owner_pool_missing_sum / decision_denom),
+            'greedy_hf_reject_by_mode_puncture_rel_fail': float(greedy_hf_reject_mode_puncture_rel_fail_sum / decision_denom),
+            'greedy_hf_reject_by_mode_puncture_sic_fail': float(greedy_hf_reject_mode_puncture_sic_fail_sum / decision_denom),
+            'greedy_hf_reject_by_mode_puncture_owner_missing': float(greedy_hf_reject_mode_puncture_owner_missing_sum / decision_denom),
+            'greedy_hf_reject_by_owner_missing': float(greedy_hf_reject_owner_missing_sum / decision_denom),
+            'greedy_hf_reject_by_owner_mismatch': float(greedy_hf_reject_owner_mismatch_sum / decision_denom),
+            'greedy_hf_gate_overlay_rel_fail_margin_mean': float(greedy_hf_gate_overlay_rel_fail_margin_sum / decision_denom),
+            'greedy_hf_gate_overlay_sic_fail_margin_db_mean': float(greedy_hf_gate_overlay_sic_fail_margin_db_sum / decision_denom),
+            'greedy_hf_gate_puncture_rel_fail_margin_mean': float(greedy_hf_gate_puncture_rel_fail_margin_sum / decision_denom),
+            'greedy_hf_gate_target_reliability': float(greedy_hf_gate_target_reliability_sum / decision_denom),
+            'greedy_hf_gate_target_sic_snir_db': float(greedy_hf_gate_target_sic_db_sum / decision_denom),
+            'greedy_hf_gate_overlay_rel_fail_snir_db_mean': float(greedy_hf_gate_overlay_rel_fail_snir_db_sum / decision_denom),
+            'greedy_hf_gate_overlay_sic_fail_post_sic_db_mean': float(greedy_hf_gate_overlay_sic_fail_post_sic_db_sum / decision_denom),
+            'greedy_hf_gate_puncture_rel_fail_snir_db_mean': float(greedy_hf_gate_puncture_rel_fail_snir_db_sum / decision_denom),
+            'greedy_hf_overlay_sic_trace_pre_sinr_db_mean': float(greedy_hf_overlay_sic_trace_pre_sinr_db_sum / decision_denom),
+            'greedy_hf_overlay_sic_trace_post_sinr_db_mean': float(greedy_hf_overlay_sic_trace_post_sinr_db_sum / decision_denom),
+            'greedy_hf_overlay_sic_trace_noise_power_mean': float(greedy_hf_overlay_sic_trace_noise_power_sum / decision_denom),
+            'greedy_hf_overlay_sic_trace_intercell_interference_mean': float(greedy_hf_overlay_sic_trace_intercell_interference_sum / decision_denom),
+            'greedy_hf_overlay_sic_trace_local_interference_mean': float(greedy_hf_overlay_sic_trace_local_interference_sum / decision_denom),
+            'greedy_hf_overlay_sic_trace_residual_sic_interference_mean': float(greedy_hf_overlay_sic_trace_residual_interference_sum / decision_denom),
+            'greedy_hf_overlay_sic_trace_sic_residual_ratio': float(greedy_hf_overlay_sic_trace_residual_ratio_sum / decision_denom),
+            'greedy_hf_overlay_presinr_raw_lt_m10': float(greedy_hf_overlay_presinr_raw_lt_m10_sum / decision_denom),
+            'greedy_hf_overlay_presinr_raw_m10_m6': float(greedy_hf_overlay_presinr_raw_m10_m6_sum / decision_denom),
+            'greedy_hf_overlay_presinr_raw_m6_m2': float(greedy_hf_overlay_presinr_raw_m6_m2_sum / decision_denom),
+            'greedy_hf_overlay_presinr_raw_ge_m2': float(greedy_hf_overlay_presinr_raw_ge_m2_sum / decision_denom),
+            'greedy_hf_overlay_presinr_kept_low_ratio': float(greedy_hf_overlay_presinr_kept_low_ratio_sum / decision_denom),
+            'greedy_hf_overlay_presinr_eval_low_ratio': float(greedy_hf_overlay_presinr_eval_low_ratio_sum / decision_denom),
+            'greedy_hf_quality_priority_enabled': float(greedy_hf_quality_priority_enabled_sum / decision_denom),
+            'greedy_hf_quality_raw_high': float(greedy_hf_quality_raw_high_sum / decision_denom),
+            'greedy_hf_quality_raw_borderline': float(greedy_hf_quality_raw_borderline_sum / decision_denom),
+            'greedy_hf_quality_raw_risk': float(greedy_hf_quality_raw_risk_sum / decision_denom),
+            'greedy_hf_quality_kept_high': float(greedy_hf_quality_kept_high_sum / decision_denom),
+            'greedy_hf_quality_kept_borderline': float(greedy_hf_quality_kept_borderline_sum / decision_denom),
+            'greedy_hf_quality_kept_risk': float(greedy_hf_quality_kept_risk_sum / decision_denom),
+            'greedy_hf_quality_eval_high': float(greedy_hf_quality_eval_high_sum / decision_denom),
+            'greedy_hf_quality_eval_borderline': float(greedy_hf_quality_eval_borderline_sum / decision_denom),
+            'greedy_hf_quality_eval_risk': float(greedy_hf_quality_eval_risk_sum / decision_denom),
+            'greedy_hf_quality_selected_high': float(greedy_hf_quality_selected_high_sum / decision_denom),
+            'greedy_hf_quality_selected_borderline': float(greedy_hf_quality_selected_borderline_sum / decision_denom),
+            'greedy_hf_quality_selected_risk': float(greedy_hf_quality_selected_risk_sum / decision_denom),
+            'greedy_hf_overlay_blacklist_cell_ratio': float(greedy_hf_overlay_blacklist_cell_ratio_sum / decision_denom),
+            'greedy_hf_overlay_blacklist_candidate_block_ratio': float(greedy_hf_overlay_blacklist_candidate_block_ratio_sum / decision_denom),
+            'greedy_hf_overlay_blacklist_saved_mode_fail_ratio': float(greedy_hf_overlay_blacklist_saved_mode_fail_ratio_sum / decision_denom),
+            'greedy_hf_overlay_only_rb_reservation_enabled': float(
+                greedy_hf_overlay_only_rb_reservation_enabled_sum / decision_denom
+            ),
+            'greedy_hf_overlay_only_rb_reservation_ratio': float(
+                greedy_hf_overlay_only_rb_reservation_ratio_sum / decision_denom
+            ),
+            'greedy_hf_overlay_only_rb_reserved_count': float(
+                greedy_hf_overlay_only_rb_reserved_count_sum / decision_denom
+            ),
+            'greedy_hf_overlay_only_rb_reserved_cell_ratio': float(
+                greedy_hf_overlay_only_rb_reserved_cell_ratio_sum / decision_denom
+            ),
+            'greedy_hf_overlay_only_rb_mode_block_ratio': float(
+                greedy_hf_overlay_only_rb_mode_block_ratio_sum / decision_denom
+            ),
         })
         result.update(
             _baseline_narrative(
@@ -2401,7 +3352,43 @@ def run_mappo_sweep(
         report_cfg.training.report_baseline_mode = getattr(base_cfg.training, "report_baseline_mode", getattr(report_cfg.training, "report_baseline_mode", ""))
         report_cfg.training.primary_checkpoint_preference = getattr(base_cfg.training, "primary_checkpoint_preference", report_cfg.training.primary_checkpoint_preference)
     report_cfg.env.include_greedy_reference_in_obs = False
+    _apply_forced_urllc_ratio_to_sim(base_sim, report_cfg, log_prefix="MAPPO")
     checkpoint_cache_tag = str(Path(checkpoint_path).resolve())
+    nested_load_enabled = str(os.environ.get("SR_MAPPO_REPORT_NESTED_LOAD_SCENARIO", "1")).strip().lower() not in {"0", "false", "no", "off"}
+    max_total_users = 0
+    max_embb_users = 0
+    max_urllc_users = 0
+    if nested_load_enabled and loads:
+        _mx_sys, _mx_ur, _mx_em, _mx_algo, _mx_sim = _configure_density_scenario(
+            max(float(x) for x in loads), base_sys, base_urllc, base_embb, base_algo, base_sim
+        )
+        max_embb_users = int(_mx_sys.num_embb_users)
+        max_urllc_users = int(_mx_sys.num_urllc_users)
+        max_total_users = int(max_embb_users + max_urllc_users)
+        fixed_pool_embb = int(_env_int_override("SR_MAPPO_REPORT_NESTED_FIXED_POOL_EMBB_USERS", 0))
+        fixed_pool_urllc = int(_env_int_override("SR_MAPPO_REPORT_NESTED_FIXED_POOL_URLLC_USERS", 0))
+        fixed_pool_total = int(_env_int_override("SR_MAPPO_REPORT_NESTED_FIXED_POOL_TOTAL_USERS", 0))
+        if fixed_pool_embb > 0:
+            max_embb_users = int(fixed_pool_embb)
+        if fixed_pool_urllc > 0:
+            max_urllc_users = int(fixed_pool_urllc)
+        if fixed_pool_total > 0:
+            max_total_users = int(fixed_pool_total)
+        else:
+            max_total_users = int(max(max_total_users, max_embb_users + max_urllc_users))
+    shared_nested_ur_order_across_loads = None
+    shared_nested_em_order_across_loads = None
+    prev_nested_embb_served_count: Optional[int] = None
+    prev_nested_embb_subset_count: Optional[int] = None
+    prev_nested_embb_selected_ids: Optional[list[int]] = None
+    virtual_slots_per_episode = max(
+        1,
+        int(os.environ.get("SR_MAPPO_REPORT_VIRTUAL_SLOTS_PER_EPISODE", "1") or "1"),
+    )
+    if virtual_slots_per_episode > 1:
+        _report_log(
+            f"[MAPPO] virtual multi-slot enabled: slots_per_episode={virtual_slots_per_episode}"
+        )
     scalar_keys = [
         'learn_embb_baseline', 'learn_phase0_embb_power', 'allow_phase_a_embb_power_adjustment',
         'embb_user_count', 'urllc_user_count', 'embb_urllc_user_ratio',
@@ -2419,9 +3406,14 @@ def run_mappo_sweep(
         'phase_a_power_total_power_reduction_mean', 'phase_a_power_intercell_reduction_mean',
         'enable_action_masking', 'enable_feasibility_shield', 'apply_joint_reliability_rewrite',
         'enable_greedy_fallback',
-        'embb_rate', 'embb_user_rate', 'embb_service_ratio', 'embb_positive_rate_ratio', 'embb_min_rate_satisfaction_ratio', 'urllc_admission',
+        'embb_rate', 'embb_rate_after_local_puncture_deduction', 'embb_total_rate_after_puncture_deduction',
+        'embb_user_rate', 'embb_user_rate_mean_after_puncture_deduction',
+        'embb_service_ratio', 'embb_positive_rate_ratio', 'embb_min_rate_satisfaction_ratio', 'embb_min_rate_satisfied_user_count', 'urllc_admission',
         'embb_service_ratio_after_puncture_deduction', 'embb_min_rate_satisfaction_after_puncture_deduction',
         'admitted_urllc_reliability', 'urllc_reliability', 'effective_urllc_success_over_arrivals', 'empty_admission_case',
+        'effective_lambda_per_user', 'effective_lambda_per_user_per_minislot',
+        'expected_total_arrivals_per_minislot', 'expected_total_arrivals_per_episode',
+        'active_packets',
         'urllc_slot_duration_s', 'urllc_packet_bits_mean',
         'urllc_throughput_bps_slot_est', 'urllc_throughput_mbps_slot_est',
         'urllc_throughput_bps_est',
@@ -2439,7 +3431,7 @@ def run_mappo_sweep(
         'phase_a_rejected_intercell_per_decision', 'phase_a_rejected_min_rate_per_decision',
         'phase_a_rejected_power_guard_per_decision', 'phase_a_rejected_collision_per_decision',
         'phase_a_rejected_deadline_per_decision', 'phase_a_rejected_other_per_decision',
-        'embb_served_user_count',
+        'embb_served_user_count', 'embb_min_rate_satisfied_user_count_after_puncture_deduction',
         'embb_rate_with_intercell', 'embb_rate_without_intercell_est', 'embb_rate_loss_due_to_intercell', 'embb_rate_loss_due_to_intercell_ratio',
         'overlay_rate_with_intercell', 'overlay_rate_without_intercell_est', 'overlay_rate_loss_due_to_intercell',
         'puncture_rate_with_intercell', 'puncture_rate_without_intercell_est', 'puncture_rate_loss_due_to_intercell',
@@ -2578,6 +3570,7 @@ def run_mappo_sweep(
     ]
     metrics = {'loads': [], 'lambda': []}
     metrics.update({key: [] for key in scalar_keys + vector_keys})
+    metrics['episode_scene_audit'] = {}
     representative = {}
     model = None
     cfg = None
@@ -2587,28 +3580,156 @@ def run_mappo_sweep(
         )
         if hasattr(base_sim, 'urllc_user_ratio'):
             sim_cfg.urllc_user_ratio = base_sim.urllc_user_ratio
+        if nested_load_enabled and max_total_users > 0:
+            setattr(sys_cfg, "nested_load_from_max_users_enabled", True)
+            setattr(sys_cfg, "nested_load_max_total_users", int(max_total_users))
+            setattr(sys_cfg, "nested_load_max_embb_users", int(max_embb_users))
+            setattr(sys_cfg, "nested_load_max_urllc_users", int(max_urllc_users))
+            setattr(sys_cfg, "force_serving_hints_association", True)
+            freeze_subset_across_episodes = _env_bool_override(
+                "SR_MAPPO_REPORT_NESTED_FIXED_SUBSET_ACROSS_EPISODES",
+                True,
+            )
+            setattr(
+                report_cfg.env,
+                "nested_fixed_user_subset_across_episodes",
+                bool(freeze_subset_across_episodes),
+            )
+            freeze_subset_across_loads = _env_bool_override(
+                "SR_MAPPO_REPORT_NESTED_FIXED_SUBSET_ACROSS_LOADS",
+                bool(getattr(report_cfg.env, "nested_fixed_user_subset_across_loads", False)),
+            )
+            setattr(report_cfg.env, "nested_fixed_user_subset_across_loads", bool(freeze_subset_across_loads))
+            if bool(freeze_subset_across_loads):
+                if shared_nested_ur_order_across_loads is not None and shared_nested_em_order_across_loads is not None:
+                    setattr(
+                        report_cfg.env,
+                        "nested_shared_ur_order_across_loads",
+                        np.asarray(shared_nested_ur_order_across_loads, dtype=np.int32).copy(),
+                    )
+                    setattr(
+                        report_cfg.env,
+                        "nested_shared_em_order_across_loads",
+                        np.asarray(shared_nested_em_order_across_loads, dtype=np.int32).copy(),
+                    )
+            else:
+                if hasattr(report_cfg.env, "nested_shared_ur_order_across_loads"):
+                    delattr(report_cfg.env, "nested_shared_ur_order_across_loads")
+                if hasattr(report_cfg.env, "nested_shared_em_order_across_loads"):
+                    delattr(report_cfg.env, "nested_shared_em_order_across_loads")
+            freeze_assoc = _env_bool_override("SR_MAPPO_REPORT_FORCE_FREEZE_ASSOC", True)
+            freeze_channel = _env_bool_override("SR_MAPPO_REPORT_FORCE_FREEZE_CHANNEL", True)
+            setattr(report_cfg.env, "freeze_association_across_episodes", bool(freeze_assoc))
+            setattr(report_cfg.env, "freeze_channel_gains_across_episodes", bool(freeze_channel))
+        try:
+            nested_embb_max_new_per_load = int(
+                str(os.environ.get("SR_MAPPO_NESTED_EMBB_MAX_NEW_PER_LOAD", "0") or "0").strip()
+            )
+        except Exception:
+            nested_embb_max_new_per_load = 0
+        if nested_embb_max_new_per_load > 0:
+            setattr(report_cfg.env, "nested_embb_max_new_per_load", int(nested_embb_max_new_per_load))
+            if prev_nested_embb_served_count is not None:
+                setattr(
+                    report_cfg.env,
+                    "nested_prev_embb_served_count",
+                    int(prev_nested_embb_served_count),
+                )
+            elif hasattr(report_cfg.env, "nested_prev_embb_served_count"):
+                delattr(report_cfg.env, "nested_prev_embb_served_count")
+            if prev_nested_embb_subset_count is not None:
+                setattr(
+                    report_cfg.env,
+                    "nested_prev_embb_subset_count",
+                    int(prev_nested_embb_subset_count),
+                )
+            elif hasattr(report_cfg.env, "nested_prev_embb_subset_count"):
+                delattr(report_cfg.env, "nested_prev_embb_subset_count")
+        else:
+            if hasattr(report_cfg.env, "nested_embb_max_new_per_load"):
+                delattr(report_cfg.env, "nested_embb_max_new_per_load")
+            if hasattr(report_cfg.env, "nested_prev_embb_served_count"):
+                delattr(report_cfg.env, "nested_prev_embb_served_count")
+            if hasattr(report_cfg.env, "nested_prev_embb_subset_count"):
+                delattr(report_cfg.env, "nested_prev_embb_subset_count")
+        monotone_prerate_guard = bool(
+            str(os.environ.get("SR_MAPPO_NESTED_EMBB_PRERATE_GUARD", "0") or "0").strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
+        if monotone_prerate_guard and prev_nested_embb_selected_ids is not None:
+            setattr(
+                report_cfg.env,
+                "nested_prev_embb_selected_ids",
+                [int(x) for x in list(prev_nested_embb_selected_ids)],
+            )
+        elif hasattr(report_cfg.env, "nested_prev_embb_selected_ids"):
+            delattr(report_cfg.env, "nested_prev_embb_selected_ids")
         env = SRMAPPOPhaseAEnv(sys_cfg, urllc_cfg, embb_cfg, algo_cfg, sim_cfg, report_cfg)
         if model is None:
             cfg, model = _build_model_for_env(env, checkpoint_path)
         seed_base = _report_seed_base(load_idx, cfg or report_cfg)
+        def _episode_runner(ep: int, collect_trace: bool) -> Dict:
+            episode_seed = int(seed_base + ep)
+            with _temporary_shared_mother_scene_for_episode(
+                env=env,
+                load=float(load),
+                load_idx=int(load_idx),
+                episode_seed=episode_seed,
+            ):
+                return _run_env_episode_virtual_slots(
+                    env=env,
+                    model=model,
+                    cfg=cfg,
+                    seed=episode_seed,
+                    collect_trace=collect_trace,
+                    use_greedy=False,
+                    greedy_policy="reference",
+                    cache_tag=checkpoint_cache_tag,
+                    virtual_slots=virtual_slots_per_episode,
+                )
         episodes, representative[load] = _run_episode_batch_with_representative(
             episodes_per_load,
-            lambda ep, collect_trace: run_env_episode(
-                env,
-                model,
-                cfg,
-                seed=seed_base + ep,
-                collect_trace=collect_trace,
-                use_greedy=False,
-                cache_tag=checkpoint_cache_tag,
-            ),
+            _episode_runner,
         )
         metrics['loads'].append(float(load))
         metrics['lambda'].append(_load_to_lambda(load))
+        metrics['episode_scene_audit'][str(float(load))] = _build_episode_scene_audit(episodes)
         for key in scalar_keys:
             metrics[key].append(_episode_scalar_mean(episodes, key, default=0.0))
         for key in vector_keys:
             metrics[key].append(np.mean(np.stack([episode[key] for episode in episodes]), axis=0))
+        if (
+            bool(getattr(report_cfg.env, "nested_fixed_user_subset_across_loads", False))
+            and (shared_nested_ur_order_across_loads is None or shared_nested_em_order_across_loads is None)
+        ):
+            try:
+                _shared_ur = getattr(env, "_nested_canonical_ur_order_cache", None)
+                _shared_em = getattr(env, "_nested_canonical_em_order_cache", None)
+                if _shared_ur is not None and _shared_em is not None:
+                    shared_nested_ur_order_across_loads = np.asarray(_shared_ur, dtype=np.int32).copy()
+                    shared_nested_em_order_across_loads = np.asarray(_shared_em, dtype=np.int32).copy()
+            except Exception:
+                shared_nested_ur_order_across_loads = None
+                shared_nested_em_order_across_loads = None
+        rep = representative.get(load, {}) or {}
+        try:
+            served_counts = [
+                float(ep.get("embb_served_user_count", ep.get("embb_served_users", 0.0)) or 0.0)
+                for ep in episodes
+            ]
+            if served_counts:
+                prev_nested_embb_served_count = int(max(round(float(np.mean(served_counts))), 0))
+            selected_indices_arr = np.asarray(rep.get("nested_selected_user_indices", []), dtype=float)
+            if selected_indices_arr.size > 0:
+                _nu = int(sys_cfg.num_urllc_users)
+                embb_sel = [
+                    int(x)
+                    for x in selected_indices_arr[_nu:].tolist()
+                ]
+                prev_nested_embb_subset_count = int(len(embb_sel))
+                prev_nested_embb_selected_ids = [int(x) for x in embb_sel]
+        except Exception:
+            pass
     _report_timing_log(f"run_mappo_sweep loads={len(loads)} episodes_per_load={episodes_per_load} sec={perf_counter() - sweep_start:.3f}")
     return metrics, representative
 
@@ -2633,6 +3754,8 @@ def run_lambda_sweep_debug(
             return "myopic_throughput"
         if normalized == "hard_feasible_throughput_greedy":
             return "hard_feasible_throughput"
+        if normalized == "global_frontier_greedy":
+            return "global_frontier"
         if normalized == "throughput_only_greedy":
             return "throughput_only"
         if normalized == "channel_only_greedy":
@@ -2756,7 +3879,7 @@ def run_greedy_normal_v1_sweep(loads: List[float], episodes_per_load: int) -> Tu
     report_cfg = SRMAPPOConfig()
     scalar_keys = [
         'embb_user_count', 'urllc_user_count', 'embb_urllc_user_ratio', 'urllc_throughput_bps_est',
-        'embb_rate', 'embb_user_rate', 'embb_service_ratio', 'embb_positive_rate_ratio', 'embb_min_rate_satisfaction_ratio', 'urllc_admission',
+        'embb_rate', 'embb_user_rate', 'embb_service_ratio', 'embb_positive_rate_ratio', 'embb_min_rate_satisfaction_ratio', 'embb_min_rate_satisfied_user_count', 'urllc_admission',
         'admitted_urllc_reliability', 'urllc_reliability', 'effective_urllc_success_over_arrivals', 'empty_admission_case',
         'active_packets', 'scheduled_packets', 'total_power', 'embb_power', 'urllc_power',
         'overlay_ratio', 'puncture_ratio', 'overlay_selection_ratio', 'puncture_selection_ratio', 'embb_only_fraction', 'avg_puncture_loss',
@@ -2803,7 +3926,7 @@ def run_greedy_normal_v1_sweep(loads: List[float], episodes_per_load: int) -> Tu
         metrics['loads'].append(float(load))
         metrics['lambda'].append(_load_to_lambda(load))
         for key in scalar_keys:
-            metrics[key].append(_safe_mean([episode.get(key, np.nan) for episode in episodes], default=np.nan))
+            metrics[key].append(_episode_scalar_aggregate(episodes, key, default=np.nan))
         for key in vector_keys:
             metrics[key].append(np.mean(np.stack([episode[key] for episode in episodes]), axis=0))
     return metrics, representative
@@ -2813,7 +3936,7 @@ def run_greedy_normal_v2_sweep(loads: List[float], episodes_per_load: int) -> Tu
     base_sys, base_urllc, base_embb, base_algo, base_sim = _build_main_like_configs()
     report_cfg = SRMAPPOConfig()
     scalar_keys = [
-        'embb_rate', 'embb_user_rate', 'embb_service_ratio', 'embb_positive_rate_ratio', 'embb_min_rate_satisfaction_ratio', 'urllc_admission',
+        'embb_rate', 'embb_user_rate', 'embb_service_ratio', 'embb_positive_rate_ratio', 'embb_min_rate_satisfaction_ratio', 'embb_min_rate_satisfied_user_count', 'urllc_admission',
         'admitted_urllc_reliability', 'urllc_reliability', 'effective_urllc_success_over_arrivals', 'empty_admission_case',
         'active_packets', 'scheduled_packets', 'total_power', 'embb_power', 'urllc_power',
         'overlay_ratio', 'puncture_ratio', 'overlay_selection_ratio', 'puncture_selection_ratio', 'embb_only_fraction', 'avg_puncture_loss',
@@ -2860,7 +3983,7 @@ def run_greedy_normal_v2_sweep(loads: List[float], episodes_per_load: int) -> Tu
         metrics['loads'].append(float(load))
         metrics['lambda'].append(_load_to_lambda(load))
         for key in scalar_keys:
-            metrics[key].append(_safe_mean([episode.get(key, np.nan) for episode in episodes], default=np.nan))
+            metrics[key].append(_episode_scalar_aggregate(episodes, key, default=np.nan))
         for key in vector_keys:
             metrics[key].append(np.mean(np.stack([episode[key] for episode in episodes]), axis=0))
     return metrics, representative
@@ -2871,7 +3994,7 @@ def run_embb_only_ceiling_sweep(loads: List[float], episodes_per_load: int) -> T
     base_sys, base_urllc, base_embb, base_algo, base_sim = _build_main_like_configs()
     report_cfg = SRMAPPOConfig()
     scalar_keys = [
-        'embb_rate', 'embb_user_rate', 'embb_service_ratio', 'embb_positive_rate_ratio', 'embb_min_rate_satisfaction_ratio', 'urllc_admission',
+        'embb_rate', 'embb_user_rate', 'embb_service_ratio', 'embb_positive_rate_ratio', 'embb_min_rate_satisfaction_ratio', 'embb_min_rate_satisfied_user_count', 'urllc_admission',
         'admitted_urllc_reliability', 'urllc_reliability', 'effective_urllc_success_over_arrivals', 'empty_admission_case',
         'active_packets', 'scheduled_packets', 'total_power', 'embb_power', 'urllc_power',
         'overlay_ratio', 'puncture_ratio', 'overlay_selection_ratio', 'puncture_selection_ratio', 'embb_only_fraction', 'avg_puncture_loss',
@@ -2909,7 +4032,7 @@ def run_embb_only_ceiling_sweep(loads: List[float], episodes_per_load: int) -> T
         metrics['loads'].append(float(load))
         metrics['lambda'].append(_load_to_lambda(load))
         for key in scalar_keys:
-            metrics[key].append(_safe_mean([episode.get(key, np.nan) for episode in episodes], default=np.nan))
+            metrics[key].append(_episode_scalar_aggregate(episodes, key, default=np.nan))
         for key in vector_keys:
             metrics[key].append(np.mean(np.stack([episode[key] for episode in episodes]), axis=0))
     _report_timing_log(
@@ -2923,7 +4046,7 @@ def run_throughput_feasible_oracle_sweep(loads: List[float], episodes_per_load: 
     base_sys, base_urllc, base_embb, base_algo, base_sim = _build_main_like_configs()
     report_cfg = SRMAPPOConfig()
     scalar_keys = [
-        'embb_rate', 'embb_user_rate', 'embb_service_ratio', 'embb_positive_rate_ratio', 'embb_min_rate_satisfaction_ratio', 'urllc_admission',
+        'embb_rate', 'embb_user_rate', 'embb_service_ratio', 'embb_positive_rate_ratio', 'embb_min_rate_satisfaction_ratio', 'embb_min_rate_satisfied_user_count', 'urllc_admission',
         'admitted_urllc_reliability', 'urllc_reliability', 'effective_urllc_success_over_arrivals', 'empty_admission_case',
         'active_packets', 'scheduled_packets', 'total_power', 'embb_power', 'urllc_power',
         'overlay_ratio', 'puncture_ratio', 'overlay_selection_ratio', 'puncture_selection_ratio', 'embb_only_fraction', 'avg_puncture_loss',
@@ -2961,7 +4084,7 @@ def run_throughput_feasible_oracle_sweep(loads: List[float], episodes_per_load: 
         metrics['loads'].append(float(load))
         metrics['lambda'].append(_load_to_lambda(load))
         for key in scalar_keys:
-            metrics[key].append(_safe_mean([episode.get(key, np.nan) for episode in episodes], default=np.nan))
+            metrics[key].append(_episode_scalar_aggregate(episodes, key, default=np.nan))
         for key in vector_keys:
             metrics[key].append(np.mean(np.stack([episode[key] for episode in episodes]), axis=0))
     _report_timing_log(
@@ -3018,7 +4141,7 @@ def run_matched_greedy_sweep(
     report_cfg.training.selection_baseline_mode = "matched_fixed_embb"
     checkpoint_cache_tag = str(Path(checkpoint_path).resolve())
     scalar_keys = [
-        'embb_rate', 'embb_user_rate', 'embb_service_ratio', 'embb_positive_rate_ratio', 'embb_min_rate_satisfaction_ratio', 'urllc_admission',
+        'embb_rate', 'embb_user_rate', 'embb_service_ratio', 'embb_positive_rate_ratio', 'embb_min_rate_satisfaction_ratio', 'embb_min_rate_satisfied_user_count', 'urllc_admission',
         'admitted_urllc_reliability', 'urllc_reliability', 'effective_urllc_success_over_arrivals', 'empty_admission_case',
         'active_packets', 'scheduled_packets', 'total_power', 'embb_power', 'urllc_power',
         'overlay_ratio', 'puncture_ratio', 'overlay_selection_ratio', 'puncture_selection_ratio', 'embb_only_fraction', 'avg_puncture_loss',
@@ -3060,7 +4183,7 @@ def run_matched_greedy_sweep(
         metrics['loads'].append(float(load))
         metrics['lambda'].append(_load_to_lambda(load))
         for key in scalar_keys:
-            metrics[key].append(_safe_mean([episode.get(key, 0.0) for episode in episodes]))
+            metrics[key].append(_episode_scalar_aggregate(episodes, key, default=0.0))
         for key in vector_keys:
             metrics[key].append(np.mean(np.stack([episode[key] for episode in episodes]), axis=0))
     _report_timing_log(
@@ -3083,7 +4206,7 @@ def run_channel_only_greedy_sweep(
     report_cfg.training.selection_baseline_mode = "channel_only_greedy"
     checkpoint_cache_tag = str(Path(checkpoint_path).resolve())
     scalar_keys = [
-        'embb_rate', 'embb_user_rate', 'embb_service_ratio', 'embb_positive_rate_ratio', 'embb_min_rate_satisfaction_ratio', 'urllc_admission',
+        'embb_rate', 'embb_user_rate', 'embb_service_ratio', 'embb_positive_rate_ratio', 'embb_min_rate_satisfaction_ratio', 'embb_min_rate_satisfied_user_count', 'urllc_admission',
         'admitted_urllc_reliability', 'urllc_reliability', 'effective_urllc_success_over_arrivals', 'empty_admission_case',
         'active_packets', 'scheduled_packets', 'total_power', 'embb_power', 'urllc_power',
         'overlay_ratio', 'puncture_ratio', 'overlay_selection_ratio', 'puncture_selection_ratio', 'embb_only_fraction', 'avg_puncture_loss',
@@ -3126,7 +4249,7 @@ def run_channel_only_greedy_sweep(
         metrics['loads'].append(float(load))
         metrics['lambda'].append(_load_to_lambda(load))
         for key in scalar_keys:
-            metrics[key].append(_safe_mean([episode.get(key, 0.0) for episode in episodes]))
+            metrics[key].append(_episode_scalar_aggregate(episodes, key, default=0.0))
         for key in vector_keys:
             metrics[key].append(np.mean(np.stack([episode[key] for episode in episodes]), axis=0))
     _report_timing_log(
@@ -3149,7 +4272,7 @@ def run_throughput_only_greedy_sweep(
     report_cfg.training.selection_baseline_mode = "throughput_only_greedy"
     checkpoint_cache_tag = str(Path(checkpoint_path).resolve())
     scalar_keys = [
-        'embb_rate', 'embb_user_rate', 'embb_service_ratio', 'embb_positive_rate_ratio', 'embb_min_rate_satisfaction_ratio', 'urllc_admission',
+        'embb_rate', 'embb_user_rate', 'embb_service_ratio', 'embb_positive_rate_ratio', 'embb_min_rate_satisfaction_ratio', 'embb_min_rate_satisfied_user_count', 'urllc_admission',
         'admitted_urllc_reliability', 'urllc_reliability', 'effective_urllc_success_over_arrivals', 'empty_admission_case',
         'active_packets', 'scheduled_packets', 'total_power', 'embb_power', 'urllc_power',
         'overlay_ratio', 'puncture_ratio', 'overlay_selection_ratio', 'puncture_selection_ratio', 'embb_only_fraction', 'avg_puncture_loss',
@@ -3200,11 +4323,161 @@ def run_throughput_only_greedy_sweep(
         metrics['loads'].append(float(load))
         metrics['lambda'].append(_load_to_lambda(load))
         for key in scalar_keys:
-            metrics[key].append(_safe_mean([episode.get(key, 0.0) for episode in episodes]))
+            metrics[key].append(_episode_scalar_aggregate(episodes, key, default=0.0))
         for key in vector_keys:
             metrics[key].append(np.mean(np.stack([episode[key] for episode in episodes]), axis=0))
     _report_timing_log(
         f"run_throughput_only_greedy_sweep loads={len(loads)} episodes_per_load={episodes_per_load} sec={perf_counter() - sweep_start:.3f}"
+    )
+    return metrics, representative
+
+
+def run_rate_loss_min_greedy_sweep(
+    loads: List[float],
+    episodes_per_load: int,
+    checkpoint_path: Path,
+    base_cfg: Optional[SRMAPPOConfig] = None,
+) -> Tuple[Dict, Dict]:
+    sweep_start = perf_counter()
+    base_sys, base_urllc, base_embb, base_algo, base_sim = _build_main_like_configs()
+    report_cfg = deepcopy(base_cfg or _load_checkpoint_cfg(checkpoint_path))
+    report_cfg.env.include_greedy_reference_in_obs = False
+    report_cfg.training.greedy_baseline_mode = "rate_loss_min_greedy"
+    report_cfg.training.selection_baseline_mode = "rate_loss_min_greedy"
+    checkpoint_cache_tag = str(Path(checkpoint_path).resolve())
+    scalar_keys = [
+        'embb_rate', 'embb_user_rate', 'embb_service_ratio', 'embb_positive_rate_ratio', 'embb_min_rate_satisfaction_ratio', 'embb_min_rate_satisfied_user_count', 'urllc_admission',
+        'admitted_urllc_reliability', 'urllc_reliability', 'effective_urllc_success_over_arrivals', 'empty_admission_case',
+        'active_packets', 'scheduled_packets', 'total_power', 'embb_power', 'urllc_power',
+        'overlay_ratio', 'puncture_ratio', 'overlay_selection_ratio', 'puncture_selection_ratio', 'embb_only_fraction', 'avg_puncture_loss',
+        'avg_overlay_retention', 'overlay_candidate_pairs', 'overlay_feasible_pairs',
+        'overlay_selected_pairs', 'admission_via_overlay_ratio', 'admission_via_puncture_ratio', 'jain_fairness', 'cell_edge_served_ratio', 'cell_edge_min_rate_satisfaction_ratio',
+        'per_uav_total_load_std', 'per_uav_urllc_sched_std', 'per_uav_throughput_std',
+        'shield_correction_ratio', 'collision_rewrite_ratio', 'fallback_ratio',
+        'mode_correction_ratio', 'packet_invalid_ratio', 'mask_invalid_ratio',
+        'joint_reliability_rewrite_ratio', 'greedy_noop_selected_ratio', 'greedy_admit_selected_ratio',
+        'greedy_overlay_ratio', 'greedy_puncture_ratio', 'greedy_avg_embb_retention',
+        'greedy_avg_embb_loss', 'greedy_avg_selected_throughput',
+        'greedy_avg_rejected_urllc_when_noop_better', 'greedy_noop_available_ratio',
+        'greedy_noop_better_ratio', 'greedy_requires_feasible_admission_only',
+        'urllc_slot_duration_s', 'urllc_packet_bits_mean',
+        'urllc_throughput_bps_slot_est', 'urllc_throughput_mbps_slot_est', 'urllc_throughput_bps_est',
+        'mean_intercell_interference_power', 'mean_intercell_interference_mw', 'mean_intercell_interference_dbm',
+        'intercell_interference_nonzero_ratio', 'overlay_intercell_interference_mw', 'puncture_intercell_interference_mw',
+    ]
+    vector_keys = [
+        'per_uav_associated_embb', 'per_uav_associated_urllc', 'per_uav_scheduled_embb',
+        'per_uav_scheduled_urllc', 'per_uav_overlay_count', 'per_uav_puncture_count',
+        'per_uav_embb_throughput',
+    ]
+    metrics = {'loads': [], 'lambda': []}
+    metrics.update({key: [] for key in scalar_keys + vector_keys})
+    metrics['episode_scene_audit'] = {}
+    representative = {}
+    for load_idx, load in enumerate(loads):
+        sys_cfg, urllc_cfg, embb_cfg, algo_cfg, sim_cfg = _configure_density_scenario(
+            load, base_sys, base_urllc, base_embb, base_algo, base_sim
+        )
+        if hasattr(base_sim, 'urllc_user_ratio'):
+            sim_cfg.urllc_user_ratio = base_sim.urllc_user_ratio
+        env = SRMAPPOPhaseAEnv(sys_cfg, urllc_cfg, embb_cfg, algo_cfg, sim_cfg, report_cfg)
+        seed_base = _report_seed_base(load_idx, report_cfg)
+        episodes, representative[load] = _run_episode_batch_with_representative(
+            episodes_per_load,
+            lambda ep, collect_trace: run_env_episode(
+                env,
+                model=None,
+                cfg=report_cfg,
+                seed=seed_base + ep,
+                collect_trace=collect_trace,
+                use_greedy=True,
+                greedy_policy="rate_loss_min",
+                cache_tag=checkpoint_cache_tag,
+            ),
+        )
+        metrics['loads'].append(float(load))
+        metrics['lambda'].append(_load_to_lambda(load))
+        for key in scalar_keys:
+            metrics[key].append(_episode_scalar_aggregate(episodes, key, default=0.0))
+        for key in vector_keys:
+            metrics[key].append(np.mean(np.stack([episode[key] for episode in episodes]), axis=0))
+    _report_timing_log(
+        f"run_rate_loss_min_greedy_sweep loads={len(loads)} episodes_per_load={episodes_per_load} sec={perf_counter() - sweep_start:.3f}"
+    )
+    return metrics, representative
+
+
+def run_force_admit_minloss_greedy_sweep(
+    loads: List[float],
+    episodes_per_load: int,
+    checkpoint_path: Path,
+    base_cfg: Optional[SRMAPPOConfig] = None,
+) -> Tuple[Dict, Dict]:
+    sweep_start = perf_counter()
+    base_sys, base_urllc, base_embb, base_algo, base_sim = _build_main_like_configs()
+    report_cfg = deepcopy(base_cfg or _load_checkpoint_cfg(checkpoint_path))
+    report_cfg.env.include_greedy_reference_in_obs = False
+    report_cfg.training.greedy_baseline_mode = "force_admit_minloss_greedy"
+    report_cfg.training.selection_baseline_mode = "force_admit_minloss_greedy"
+    checkpoint_cache_tag = str(Path(checkpoint_path).resolve())
+    scalar_keys = [
+        'embb_rate', 'embb_user_rate', 'embb_service_ratio', 'embb_positive_rate_ratio', 'embb_min_rate_satisfaction_ratio', 'embb_min_rate_satisfied_user_count', 'urllc_admission',
+        'admitted_urllc_reliability', 'urllc_reliability', 'effective_urllc_success_over_arrivals', 'empty_admission_case',
+        'active_packets', 'scheduled_packets', 'total_power', 'embb_power', 'urllc_power',
+        'overlay_ratio', 'puncture_ratio', 'overlay_selection_ratio', 'puncture_selection_ratio', 'embb_only_fraction', 'avg_puncture_loss',
+        'avg_overlay_retention', 'overlay_candidate_pairs', 'overlay_feasible_pairs',
+        'overlay_selected_pairs', 'admission_via_overlay_ratio', 'admission_via_puncture_ratio', 'jain_fairness', 'cell_edge_served_ratio', 'cell_edge_min_rate_satisfaction_ratio',
+        'per_uav_total_load_std', 'per_uav_urllc_sched_std', 'per_uav_throughput_std',
+        'shield_correction_ratio', 'collision_rewrite_ratio', 'fallback_ratio',
+        'mode_correction_ratio', 'packet_invalid_ratio', 'mask_invalid_ratio',
+        'joint_reliability_rewrite_ratio', 'greedy_noop_selected_ratio', 'greedy_admit_selected_ratio',
+        'greedy_overlay_ratio', 'greedy_puncture_ratio', 'greedy_avg_embb_retention',
+        'greedy_avg_embb_loss', 'greedy_avg_selected_throughput',
+        'greedy_avg_rejected_urllc_when_noop_better', 'greedy_noop_available_ratio',
+        'greedy_noop_better_ratio', 'greedy_requires_feasible_admission_only',
+        'urllc_slot_duration_s', 'urllc_packet_bits_mean',
+        'urllc_throughput_bps_slot_est', 'urllc_throughput_mbps_slot_est', 'urllc_throughput_bps_est',
+        'mean_intercell_interference_power', 'mean_intercell_interference_mw', 'mean_intercell_interference_dbm',
+        'intercell_interference_nonzero_ratio', 'overlay_intercell_interference_mw', 'puncture_intercell_interference_mw',
+    ]
+    vector_keys = [
+        'per_uav_associated_embb', 'per_uav_associated_urllc', 'per_uav_scheduled_embb',
+        'per_uav_scheduled_urllc', 'per_uav_overlay_count', 'per_uav_puncture_count',
+        'per_uav_embb_throughput',
+    ]
+    metrics = {'loads': [], 'lambda': []}
+    metrics.update({key: [] for key in scalar_keys + vector_keys})
+    metrics['episode_scene_audit'] = {}
+    representative = {}
+    for load_idx, load in enumerate(loads):
+        sys_cfg, urllc_cfg, embb_cfg, algo_cfg, sim_cfg = _configure_density_scenario(
+            load, base_sys, base_urllc, base_embb, base_algo, base_sim
+        )
+        if hasattr(base_sim, 'urllc_user_ratio'):
+            sim_cfg.urllc_user_ratio = base_sim.urllc_user_ratio
+        env = SRMAPPOPhaseAEnv(sys_cfg, urllc_cfg, embb_cfg, algo_cfg, sim_cfg, report_cfg)
+        seed_base = _report_seed_base(load_idx, report_cfg)
+        episodes, representative[load] = _run_episode_batch_with_representative(
+            episodes_per_load,
+            lambda ep, collect_trace: run_env_episode(
+                env,
+                model=None,
+                cfg=report_cfg,
+                seed=seed_base + ep,
+                collect_trace=collect_trace,
+                use_greedy=True,
+                greedy_policy="force_admit_minloss",
+                cache_tag=checkpoint_cache_tag,
+            ),
+        )
+        metrics['loads'].append(float(load))
+        metrics['lambda'].append(_load_to_lambda(load))
+        for key in scalar_keys:
+            metrics[key].append(_episode_scalar_aggregate(episodes, key, default=0.0))
+        for key in vector_keys:
+            metrics[key].append(np.mean(np.stack([episode[key] for episode in episodes]), axis=0))
+    _report_timing_log(
+        f"run_force_admit_minloss_greedy_sweep loads={len(loads)} episodes_per_load={episodes_per_load} sec={perf_counter() - sweep_start:.3f}"
     )
     return metrics, representative
 
@@ -3237,7 +4510,7 @@ def run_myopic_throughput_greedy_sweep(
     report_cfg.training.selection_baseline_mode = "myopic_throughput_greedy"
     checkpoint_cache_tag = str(Path(checkpoint_path).resolve())
     scalar_keys = [
-        'embb_rate', 'embb_user_rate', 'embb_service_ratio', 'embb_positive_rate_ratio', 'embb_min_rate_satisfaction_ratio', 'urllc_admission',
+        'embb_rate', 'embb_user_rate', 'embb_service_ratio', 'embb_positive_rate_ratio', 'embb_min_rate_satisfaction_ratio', 'embb_min_rate_satisfied_user_count', 'urllc_admission',
         'admitted_urllc_reliability', 'urllc_reliability', 'effective_urllc_success_over_arrivals', 'empty_admission_case',
         'active_packets', 'scheduled_packets', 'total_power', 'embb_power', 'urllc_power',
         'overlay_ratio', 'puncture_ratio', 'overlay_selection_ratio', 'puncture_selection_ratio', 'embb_only_fraction', 'avg_puncture_loss',
@@ -3284,7 +4557,7 @@ def run_myopic_throughput_greedy_sweep(
         metrics['loads'].append(float(load))
         metrics['lambda'].append(_load_to_lambda(load))
         for key in scalar_keys:
-            metrics[key].append(_safe_mean([episode.get(key, 0.0) for episode in episodes]))
+            metrics[key].append(_episode_scalar_aggregate(episodes, key, default=0.0))
         for key in vector_keys:
             metrics[key].append(np.mean(np.stack([episode[key] for episode in episodes]), axis=0))
     _report_timing_log(
@@ -3301,11 +4574,51 @@ def run_hard_feasible_throughput_greedy_sweep(
     verbose_per_episode: bool = True,
 ) -> Tuple[Dict, Dict]:
     sweep_start = perf_counter()
+    greedy_policy_override_raw = str(
+        os.environ.get("SR_MAPPO_REPORT_GREEDY_POLICY_OVERRIDE", "") or ""
+    ).strip().lower()
+    cfg_mode_normalized = _normalize_baseline_mode(
+        getattr((base_cfg or _load_checkpoint_cfg(checkpoint_path)).training, "greedy_baseline_mode", "hard_feasible_throughput_greedy")
+    )
+    if greedy_policy_override_raw:
+        greedy_policy_override = greedy_policy_override_raw
+    elif cfg_mode_normalized == "global_frontier_greedy":
+        greedy_policy_override = "global_frontier"
+    elif cfg_mode_normalized == "throughput_only_greedy":
+        greedy_policy_override = "throughput_only"
+    elif cfg_mode_normalized == "channel_only_greedy":
+        greedy_policy_override = "channel_only"
+    elif cfg_mode_normalized == "myopic_throughput_greedy":
+        greedy_policy_override = "myopic_throughput"
+    else:
+        greedy_policy_override = "hard_feasible_throughput"
+    virtual_slots_per_episode = max(
+        1,
+        int(os.environ.get("SR_MAPPO_REPORT_VIRTUAL_SLOTS_PER_EPISODE", "1") or "1"),
+    )
+    if virtual_slots_per_episode > 1:
+        _report_log(
+            f"[GREEDY] virtual multi-slot enabled: slots_per_episode={virtual_slots_per_episode}"
+        )
     base_sys, base_urllc, base_embb, base_algo, base_sim = _build_main_like_configs()
     report_cfg = deepcopy(base_cfg or _load_checkpoint_cfg(checkpoint_path))
     # Optional report-time hard-feasible greedy gate overrides.
     # This affects only the greedy report sweep path and keeps training/runtime env untouched.
     gain_ratio_override = float(getattr(report_cfg.env, "greedy_hf_min_noma_gain_ratio_override", -1.0) or -1.0)
+    gain_ratio_override_env = os.environ.get("SR_MAPPO_REPORT_GREEDY_HF_MIN_NOMA_GAIN_RATIO_OVERRIDE", "").strip()
+    if gain_ratio_override_env:
+        try:
+            gain_ratio_override = float(gain_ratio_override_env)
+            _report_log(
+                "[OVERRIDE] greedy_hf_min_noma_gain_ratio_override="
+                f"{gain_ratio_override:.6f} "
+                f"(from SR_MAPPO_REPORT_GREEDY_HF_MIN_NOMA_GAIN_RATIO_OVERRIDE={gain_ratio_override_env})"
+            )
+        except ValueError:
+            _report_log(
+                "[OVERRIDE] ignore invalid SR_MAPPO_REPORT_GREEDY_HF_MIN_NOMA_GAIN_RATIO_OVERRIDE="
+                f"{gain_ratio_override_env}"
+            )
     sic_db_override = float(getattr(report_cfg.env, "greedy_hf_embb_min_sic_snir_db_override", -100.0) or -100.0)
     if gain_ratio_override > 0.0:
         base_algo.min_noma_gain_ratio = float(gain_ratio_override)
@@ -3313,6 +4626,56 @@ def run_hard_feasible_throughput_greedy_sweep(
     if sic_db_override > -100.0:
         base_algo.embb_min_sic_snir_db = float(sic_db_override)
         _report_log(f"[GREEDY] override embb_min_sic_snir_db={base_algo.embb_min_sic_snir_db:.3f} dB")
+    minrate_scale_override = float(getattr(report_cfg.env, "report_embb_min_rate_scale", 1.0) or 1.0)
+    if abs(minrate_scale_override - 1.0) > 1.0e-12:
+        old_min = float(getattr(base_embb, "min_rate_per_user_bps", getattr(base_embb, "min_rate", 0.0)) or 0.0)
+        new_min = float(old_min * minrate_scale_override)
+        if hasattr(base_embb, "min_rate_per_user_bps"):
+            base_embb.min_rate_per_user_bps = float(new_min)
+        if hasattr(base_embb, "min_rate"):
+            base_embb.min_rate = float(new_min)
+        _report_log(
+            f"[GREEDY] override eMBB min-rate scale={minrate_scale_override:.4f} "
+            f"({old_min:.3e} -> {new_min:.3e} bps)"
+        )
+    relax_mode_env = str(os.environ.get("SR_MAPPO_GREEDY_HF_RELAX_MODE_FEASIBLE", "")).strip().lower()
+    if relax_mode_env:
+        report_cfg.env.greedy_hf_relax_mode_feasible = bool(relax_mode_env in {"1", "true", "yes", "on"})
+        _report_log(f"[GREEDY] override greedy_hf_relax_mode_feasible={bool(report_cfg.env.greedy_hf_relax_mode_feasible)}")
+    soft_score_env = str(os.environ.get("SR_MAPPO_GREEDY_HF_SOFT_FEASIBLE_SCORING", "")).strip().lower()
+    if soft_score_env:
+        report_cfg.env.greedy_hf_soft_feasible_scoring = bool(soft_score_env in {"1", "true", "yes", "on"})
+        _report_log(f"[GREEDY] override greedy_hf_soft_feasible_scoring={bool(report_cfg.env.greedy_hf_soft_feasible_scoring)}")
+    topk_tail_env = str(os.environ.get("SR_MAPPO_GREEDY_HF_TOPK_REPAIR_TAIL", "")).strip()
+    if topk_tail_env:
+        try:
+            report_cfg.env.greedy_hf_topk_repair_tail = max(0, int(topk_tail_env))
+            _report_log(f"[GREEDY] override greedy_hf_topk_repair_tail={int(report_cfg.env.greedy_hf_topk_repair_tail)}")
+        except Exception:
+            _report_log(f"[GREEDY] ignore invalid SR_MAPPO_GREEDY_HF_TOPK_REPAIR_TAIL={topk_tail_env!r}")
+    mode_penalty_env = str(os.environ.get("SR_MAPPO_GREEDY_HF_MODE_VIOLATION_PENALTY", "")).strip()
+    if mode_penalty_env:
+        try:
+            report_cfg.env.greedy_hf_soft_penalty_mode_infeasible = float(mode_penalty_env)
+            _report_log(
+                f"[GREEDY] override greedy_hf_soft_penalty_mode_infeasible="
+                f"{float(report_cfg.env.greedy_hf_soft_penalty_mode_infeasible):.3f}"
+            )
+        except Exception:
+            _report_log(f"[GREEDY] ignore invalid SR_MAPPO_GREEDY_HF_MODE_VIOLATION_PENALTY={mode_penalty_env!r}")
+    reliability_penalty_env = str(os.environ.get("SR_MAPPO_GREEDY_HF_RELIABILITY_VIOLATION_PENALTY", "")).strip()
+    if reliability_penalty_env:
+        try:
+            report_cfg.env.greedy_hf_soft_penalty_reliability = float(reliability_penalty_env)
+            _report_log(
+                f"[GREEDY] override greedy_hf_soft_penalty_reliability="
+                f"{float(report_cfg.env.greedy_hf_soft_penalty_reliability):.3f}"
+            )
+        except Exception:
+            _report_log(
+                f"[GREEDY] ignore invalid SR_MAPPO_GREEDY_HF_RELIABILITY_VIOLATION_PENALTY="
+                f"{reliability_penalty_env!r}"
+            )
     forced_urllc_ratio = _resolve_forced_urllc_ratio(report_cfg)
     exp_line = str(getattr(report_cfg.training, "experiment_line", "") or "").strip().lower()
     if hasattr(base_sim, "urllc_user_ratio") and forced_urllc_ratio >= 0.0:
@@ -3327,9 +4690,36 @@ def run_hard_feasible_throughput_greedy_sweep(
             f"[GREEDY] forcing urllc_user_ratio={base_sim.urllc_user_ratio:.3f} "
             f"(override={float(getattr(report_cfg.env, 'urllc_user_ratio_override', -1.0)):.3f}, experiment='{exp_line}')"
         )
+    fixed_embb_users = int(_env_int_override("SR_MAPPO_REPORT_FIXED_EMBB_USERS", 0))
+    if fixed_embb_users > 0:
+        try:
+            setattr(base_sim, "fixed_embb_user_count", int(fixed_embb_users))
+            _report_log(f"[GREEDY] fixed eMBB user count override enabled: fixed_embb_user_count={int(fixed_embb_users)}")
+        except Exception:
+            _report_log(f"[GREEDY] failed to apply fixed eMBB user count override: {fixed_embb_users}")
+    _owner_policy = str(os.environ.get("SR_MAPPO_OWNER_POLICY", "legacy") or "legacy").strip().lower()
+    _owner_pool_cap = str(os.environ.get("SR_MAPPO_OWNER_TOPK_USER_POOL", "0") or "0").strip()
+    _owner_lowload_enable = str(os.environ.get("SR_MAPPO_OWNER_TOPK_LOWLOAD_ENABLE", "1") or "1").strip()
+    _owner_lowload_max_load = str(os.environ.get("SR_MAPPO_OWNER_TOPK_LOWLOAD_MAX_LOAD", "12") or "12").strip()
+    _owner_lowload_max_rb_per_round = str(
+        os.environ.get("SR_MAPPO_OWNER_TOPK_LOWLOAD_MAX_RB_PER_USER_PER_ROUND", "0") or "0"
+    ).strip()
+    _report_log(f"[GREEDY] owner policy: {_owner_policy}")
+    _report_log(f"[GREEDY] owner topk user pool cap: {_owner_pool_cap}")
+    _report_log(
+        "[GREEDY] owner low-load mode: "
+        f"enable={_owner_lowload_enable} "
+        f"max_load={_owner_lowload_max_load} "
+        f"max_rb_per_user_per_round={_owner_lowload_max_rb_per_round}"
+    )
     report_cfg.env.include_greedy_reference_in_obs = False
-    report_cfg.training.greedy_baseline_mode = "hard_feasible_throughput_greedy"
-    report_cfg.training.selection_baseline_mode = "hard_feasible_throughput_greedy"
+    baseline_mode_name = (
+        "global_frontier_greedy"
+        if greedy_policy_override in {"global_frontier", "global_greedy"}
+        else "hard_feasible_throughput_greedy"
+    )
+    report_cfg.training.greedy_baseline_mode = baseline_mode_name
+    report_cfg.training.selection_baseline_mode = baseline_mode_name
     checkpoint_cache_tag = str(Path(checkpoint_path).resolve())
     nested_load_enabled = str(os.environ.get("SR_MAPPO_REPORT_NESTED_LOAD_SCENARIO", "1")).strip().lower() not in {"0", "false", "no", "off"}
     max_total_users = 0
@@ -3342,12 +4732,32 @@ def run_hard_feasible_throughput_greedy_sweep(
         max_embb_users = int(_mx_sys.num_embb_users)
         max_urllc_users = int(_mx_sys.num_urllc_users)
         max_total_users = int(max_embb_users + max_urllc_users)
+        # Optional canonical nested-pool override for tri-mix comparability:
+        # force all mixes to share exactly the same mother-pool boundaries.
+        # Useful when we want "only mix ratio/arrival changes" while keeping pool mapping stable.
+        fixed_pool_embb = int(_env_int_override("SR_MAPPO_REPORT_NESTED_FIXED_POOL_EMBB_USERS", 0))
+        fixed_pool_urllc = int(_env_int_override("SR_MAPPO_REPORT_NESTED_FIXED_POOL_URLLC_USERS", 0))
+        fixed_pool_total = int(_env_int_override("SR_MAPPO_REPORT_NESTED_FIXED_POOL_TOTAL_USERS", 0))
+        if fixed_pool_embb > 0:
+            max_embb_users = int(fixed_pool_embb)
+        if fixed_pool_urllc > 0:
+            max_urllc_users = int(fixed_pool_urllc)
+        if fixed_pool_total > 0:
+            max_total_users = int(fixed_pool_total)
+        else:
+            max_total_users = int(max(max_total_users, max_embb_users + max_urllc_users))
+        if (fixed_pool_embb > 0) or (fixed_pool_urllc > 0) or (fixed_pool_total > 0):
+            _report_log(
+                f"[GREEDY] nested fixed-pool override enabled: "
+                f"total/embb/urllc={max_total_users}/{max_embb_users}/{max_urllc_users} "
+                f"(env: TOTAL={fixed_pool_total}, EMBB={fixed_pool_embb}, URLLC={fixed_pool_urllc})"
+            )
         _report_log(
             f"[GREEDY] nested-load enabled: max_users(total/embb/urllc)="
             f"{max_total_users}/{max_embb_users}/{max_urllc_users}"
         )
     scalar_keys = [
-        'embb_rate', 'embb_rate_pre_urllc_admission', 'embb_user_rate', 'embb_service_ratio', 'embb_positive_rate_ratio', 'embb_min_rate_satisfaction_ratio', 'urllc_admission',
+        'embb_rate', 'embb_rate_pre_urllc_admission', 'embb_user_rate', 'embb_service_ratio', 'embb_positive_rate_ratio', 'embb_min_rate_satisfaction_ratio', 'embb_min_rate_satisfied_user_count', 'urllc_admission',
         'admitted_urllc_reliability', 'urllc_reliability', 'effective_urllc_success_over_arrivals', 'empty_admission_case',
         'active_packets', 'scheduled_packets', 'total_power', 'embb_power', 'urllc_power',
         'overlay_ratio', 'puncture_ratio', 'overlay_selection_ratio', 'puncture_selection_ratio', 'embb_only_fraction', 'avg_puncture_loss',
@@ -3372,12 +4782,50 @@ def run_hard_feasible_throughput_greedy_sweep(
         'greedy_hf_reject_min_rate_per_decision', 'greedy_hf_reject_share_cap_per_decision',
         'greedy_hf_candidate_evaluated_per_decision', 'greedy_hf_candidate_feasible_per_decision',
         'greedy_hf_rescan_used', 'greedy_hf_prefilter_truncated',
+        'greedy_hf_enforce_min_rate_hard_gate',
+        'greedy_hf_pre_admission_all_embb_min_rate_required',
+        'greedy_hf_pre_admission_all_embb_min_rate_met',
         'greedy_hf_no_candidate_ratio', 'greedy_hf_all_rejected_ratio', 'greedy_hf_budget_exhausted_keep_ratio',
         'greedy_hf_no_candidate_per_decision', 'greedy_hf_all_rejected_per_decision', 'greedy_hf_budget_exhausted_keep_per_decision',
         'greedy_hf_prefilter_pair_per_decision', 'greedy_hf_prefilter_block_mode_mask_per_decision',
         'greedy_hf_prefilter_block_packet_mask_per_decision', 'greedy_hf_prefilter_block_mode_infeasible_per_decision',
         'greedy_hf_prefilter_block_mode_mask_ratio', 'greedy_hf_prefilter_block_packet_mask_ratio',
         'greedy_hf_prefilter_block_mode_infeasible_ratio',
+        'greedy_hf_relaxed_candidate_ratio', 'greedy_hf_selected_relaxed_ratio',
+        'greedy_hf_final_gate_reject_ratio', 'greedy_hf_final_gate_keep_ratio',
+        'greedy_hf_final_gate_reject_mode_per_decision',
+        'greedy_hf_final_gate_reject_reliability_per_decision',
+        'greedy_hf_final_gate_reject_power_per_decision',
+        'greedy_hf_final_gate_reject_min_rate_per_decision',
+        'greedy_hf_final_gate_reject_mode_given_final_gate_ratio',
+        'greedy_hf_final_gate_reject_reliability_given_final_gate_ratio',
+        'greedy_hf_final_gate_reject_power_given_final_gate_ratio',
+        'greedy_hf_final_gate_reject_min_rate_given_final_gate_ratio',
+        'greedy_hf_reject_by_mode_overlay_rel_fail',
+        'greedy_hf_reject_by_mode_overlay_sic_fail',
+        'greedy_hf_reject_by_mode_gain_ratio_fail',
+        'greedy_hf_reject_by_mode_owner_pool_missing',
+        'greedy_hf_reject_by_mode_owner_unresolved_due_to_mode_fail',
+        'greedy_hf_reject_by_mode_overlay_owner_missing',
+        'greedy_hf_reject_by_mode_puncture_rel_fail',
+        'greedy_hf_reject_by_mode_puncture_sic_fail',
+        'greedy_hf_reject_by_mode_puncture_owner_missing',
+        'greedy_hf_reject_by_owner_missing',
+        'greedy_hf_reject_by_owner_mismatch',
+        'greedy_hf_gate_overlay_rel_fail_margin_mean',
+        'greedy_hf_gate_overlay_sic_fail_margin_db_mean',
+        'greedy_hf_gate_puncture_rel_fail_margin_mean',
+        'greedy_hf_gate_target_reliability',
+        'greedy_hf_gate_target_sic_snir_db',
+        'greedy_hf_gate_overlay_rel_fail_snir_db_mean',
+        'greedy_hf_gate_overlay_sic_fail_post_sic_db_mean',
+        'greedy_hf_gate_puncture_rel_fail_snir_db_mean',
+        'pre_mode_overlay_rel_fail_per_decision',
+        'pre_mode_overlay_sic_fail_per_decision',
+        'pre_mode_gain_ratio_fail_per_decision',
+        'pre_mode_puncture_rel_fail_per_decision',
+        'pre_mode_puncture_sic_fail_per_decision',
+        'greedy_hf_mode_violation_penalty_avg',
         'greedy_hf_no_candidate_block_mode_mask_per_no_candidate',
         'greedy_hf_no_candidate_block_packet_mask_per_no_candidate',
         'greedy_hf_no_candidate_block_mode_infeasible_per_no_candidate',
@@ -3402,28 +4850,121 @@ def run_hard_feasible_throughput_greedy_sweep(
         'phase_a_rejected_other_overlay_sic_given_other_ratio',
         'urllc_slot_duration_s', 'urllc_packet_bits_mean',
         'urllc_throughput_bps_slot_est', 'urllc_throughput_mbps_slot_est',
+        'phase0_baseline_cache_hit_ratio', 'phase0_baseline_cache_hit_count', 'phase0_baseline_cache_total_count',
+        'phase0_baseline_minrate_exit_reason',
+        'phase0_stage1_handoff_remaining_cells', 'phase0_stage1_handoff_served_users',
+        'phase0_stage1_handoff_unmet_users', 'phase0_stage1_handoff_total_rate',
+        'phase0_stage1_handoff_service_ratio', 'phase0_stage1_handoff_minrate_ratio',
+        'phase0_stage1_handoff_mean_rb_per_served', 'phase0_stage1_handoff_max_rb_single_user',
+        'phase0_stage1_handoff_top1_rb_share', 'phase0_stage1_handoff_top2_rb_share',
+        'phase0_stage1_served_cap_effective', 'phase0_stage1_served_cap_block_count',
+        'phase0_stage1_touch_repeat_block_count', 'phase0_stage1_allow_stage2_after_served_cap',
+        'phase0_stage1_transition_progress',
+        'phase0_stage2_assigned_cells', 'phase0_stage2_existing_user_assignments',
+        'phase0_stage2_new_user_assignments', 'phase0_stage2_existing_user_gain_sum',
+        'phase0_stage2_new_user_gain_sum', 'phase0_stage2_existing_user_assignment_ratio',
+        'phase0_stage2_new_user_assignment_ratio',
+        'virtual_slot_reset_count_per_episode',
         'mean_intercell_interference_power', 'mean_intercell_interference_mw', 'mean_intercell_interference_dbm', 'intercell_interference_nonzero_ratio',
         'overlay_intercell_interference_mw', 'puncture_intercell_interference_mw',
-        'embb_served_user_count',
+        'embb_served_user_count', 'embb_min_rate_satisfied_user_count', 'embb_min_rate_satisfied_user_count_after_puncture_deduction',
         'embb_rate_with_intercell', 'embb_rate_without_intercell_est', 'embb_rate_loss_due_to_intercell', 'embb_rate_loss_due_to_intercell_ratio',
         'overlay_rate_with_intercell', 'overlay_rate_without_intercell_est', 'overlay_rate_loss_due_to_intercell',
         'puncture_rate_with_intercell', 'puncture_rate_without_intercell_est', 'puncture_rate_loss_due_to_intercell',
         'terminal_embb_service_floor_penalty', 'terminal_embb_min_rate_floor_penalty',
         'terminal_embb_service_bonus', 'terminal_embb_min_rate_bonus', 'terminal_avg_served_embb_rate_bonus',
         'urllc_admission_over_service_tradeoff_penalty',
+        'sic_prior_pair_block_ratio', 'sic_prior_saved_mode_fail_ratio', 'sic_prior_owner_total_per_decision',
+        'greedy_hf_overlay_blacklist_cell_ratio', 'greedy_hf_overlay_blacklist_candidate_block_ratio', 'greedy_hf_overlay_blacklist_saved_mode_fail_ratio',
+        'greedy_hf_overlay_only_rb_reservation_enabled', 'greedy_hf_overlay_only_rb_reservation_ratio',
+        'greedy_hf_overlay_only_rb_reserved_count', 'greedy_hf_overlay_only_rb_reserved_cell_ratio',
+        'greedy_hf_overlay_only_rb_mode_block_ratio', 'greedy_hf_overlay_only_rb_hard_block_enabled',
+        'greedy_hf_overlay_only_rb_soft_preference_enabled', 'greedy_hf_overlay_only_rb_overlay_bonus_bps',
+        'greedy_hf_overlay_only_rb_puncture_penalty_bps', 'greedy_hf_overlay_only_rb_soft_preference_applied_ratio',
+        'guardrail_enabled', 'guardrail_resample_count', 'guardrail_pass_ratio',
+        'guardrail_reject_reason_overlay', 'guardrail_reject_reason_embb_minrate', 'guardrail_reject_reason_uav_imbalance',
+        'guardrail_actual_overlay_feasible_ratio', 'guardrail_actual_embb_minrate_ratio', 'guardrail_actual_uav_load_imbalance',
+        'guardrail_threshold_overlay', 'guardrail_threshold_embb_minrate', 'guardrail_threshold_uav_imbalance',
+        'candidate_pair_count', 'feasible_pair_count', 'feasible_pair_ratio',
+        'requested_mix_ratio', 'realized_resource_ratio', 'realized_power_ratio', 'realized_served_users_ratio',
+        'feasible_graph_freeze_enabled',
     ]
     vector_keys = [
         'per_uav_associated_embb', 'per_uav_associated_urllc', 'per_uav_scheduled_embb',
         'per_uav_scheduled_urllc', 'per_uav_overlay_count', 'per_uav_puncture_count',
         'per_uav_embb_throughput',
     ]
+    if bool(getattr(report_cfg.env, "report_export_embb_user_rates", False)):
+        vector_keys.extend([
+            'embb_user_rates',
+            'embb_user_rates_after_puncture_deduction',
+            'embb_user_rb_count',
+            'embb_user_rate_per_assigned_rb_est',
+            'embb_user_single_rb_true_rate',
+            'embb_user_associated_uav',
+        ])
     metrics = {'loads': [], 'lambda': []}
     metrics.update({key: [] for key in scalar_keys + vector_keys})
+    metrics['mother_topology_id'] = []
+    metrics['mother_topology_seed'] = []
+    metrics['same_channel_hash'] = []
+    metrics['same_assoc_hash'] = []
+    metrics['same_user_pool_hash'] = []
+    metrics['mix_user_subset_hash'] = []
+    metrics['embb_subset_hash'] = []
+    metrics['same_feasible_graph_hash'] = []
+    metrics['feasible_graph_id'] = []
+    metrics['overlay_graph_hash'] = []
+    metrics['channel_matrix_hash'] = []
+    metrics['pathloss_hash'] = []
+    metrics['shadowing_hash'] = []
+    metrics['sic_order_hash'] = []
+    metrics['repair_sequence_hash'] = []
+    metrics['guardrail_pass'] = []
     # Keep per-episode samples for downstream analysis (e.g., share-cap CDF).
     metrics['greedy_episode_arrivals_samples'] = []
     metrics['greedy_episode_admitted_samples'] = []
     metrics['greedy_episode_budget_used_ratio_samples'] = []
+    metrics['episode_scene_audit'] = {}
     representative = {}
+    shared_nested_ur_order_across_loads = None
+    shared_nested_em_order_across_loads = None
+    prev_nested_embb_subset_count: Optional[int] = None
+    prev_nested_embb_served_count: Optional[int] = None
+    prev_nested_embb_selected_ids: Optional[list[int]] = None
+    prev_selected_ids: set[int] = set()
+    prev_phase0_owner_map: Optional[np.ndarray] = None
+    prev_phase0_rate_cap_bps: Optional[float] = None
+    cross_mix_rate_cap_map_bps: Dict[float, float] = {}
+    try:
+        raw_cross_mix_caps = getattr(report_cfg.env, "phase0_cross_mix_rate_cap_map_bps", None)
+        if isinstance(raw_cross_mix_caps, dict):
+            for k, v in raw_cross_mix_caps.items():
+                cross_mix_rate_cap_map_bps[float(k)] = float(v)
+    except Exception:
+        cross_mix_rate_cap_map_bps = {}
+    per_load_poisson_rate_override: Dict[float, float] = {}
+    try:
+        raw_poisson_rate_map = os.environ.get("SR_MAPPO_REPORT_URLLC_POISSON_RATE_MAP_OVERRIDE", "").strip()
+        if raw_poisson_rate_map:
+            parsed_poisson_rate_map = json.loads(raw_poisson_rate_map)
+            if isinstance(parsed_poisson_rate_map, dict):
+                for k, v in parsed_poisson_rate_map.items():
+                    per_load_poisson_rate_override[float(k)] = float(v)
+    except Exception:
+        per_load_poisson_rate_override = {}
+    per_load_nested_embb_served_cap_override: Dict[float, int] = {}
+    try:
+        raw_served_cap_map = os.environ.get("SR_MAPPO_REPORT_NESTED_EMBB_SERVED_CAP_MAP", "").strip()
+        if raw_served_cap_map:
+            parsed_served_cap_map = json.loads(raw_served_cap_map)
+            if isinstance(parsed_served_cap_map, dict):
+                for k, v in parsed_served_cap_map.items():
+                    per_load_nested_embb_served_cap_override[float(k)] = int(round(float(v)))
+    except Exception:
+        per_load_nested_embb_served_cap_override = {}
+    continuity_prev_scheduled_mean: Optional[float] = None
+    continuity_prev_active_mean: Optional[float] = None
     for load_idx, load in enumerate(loads):
         sys_cfg, urllc_cfg, embb_cfg, algo_cfg, sim_cfg = _configure_density_scenario(
             load, base_sys, base_urllc, base_embb, base_algo, base_sim
@@ -3433,23 +4974,291 @@ def run_hard_feasible_throughput_greedy_sweep(
             setattr(sys_cfg, "nested_load_max_total_users", int(max_total_users))
             setattr(sys_cfg, "nested_load_max_embb_users", int(max_embb_users))
             setattr(sys_cfg, "nested_load_max_urllc_users", int(max_urllc_users))
+            # Keep per-cell composition controlled across load sweep:
+            # association follows generated serving hints instead of re-associating
+            # by large-scale argmax.
+            setattr(sys_cfg, "force_serving_hints_association", True)
+            # Hold the selected nested subset fixed across episodes by default so
+            # the sweep compares load on the same mother-scene/user ordering.
+            # Allow explicit override for experiments that need per-episode subset
+            # variation under the same frozen mother scene.
+            freeze_subset_across_episodes = _env_bool_override(
+                "SR_MAPPO_REPORT_NESTED_FIXED_SUBSET_ACROSS_EPISODES",
+                True,
+            )
+            setattr(
+                report_cfg.env,
+                "nested_fixed_user_subset_across_episodes",
+                bool(freeze_subset_across_episodes),
+            )
+            # Optional stronger control: reuse the same canonical URLLC/eMBB
+            # ordering across load buckets, then let each load take its own
+            # class-wise prefix. This reduces cross-load subset jitter without
+            # removing the intended load-dependent user-count scaling.
+            freeze_subset_across_loads = _env_bool_override(
+                "SR_MAPPO_REPORT_NESTED_FIXED_SUBSET_ACROSS_LOADS",
+                bool(getattr(report_cfg.env, "nested_fixed_user_subset_across_loads", False)),
+            )
+            setattr(report_cfg.env, "nested_fixed_user_subset_across_loads", bool(freeze_subset_across_loads))
+            if bool(freeze_subset_across_loads):
+                if shared_nested_ur_order_across_loads is not None and shared_nested_em_order_across_loads is not None:
+                    setattr(
+                        report_cfg.env,
+                        "nested_shared_ur_order_across_loads",
+                        np.asarray(shared_nested_ur_order_across_loads, dtype=np.int32).copy(),
+                    )
+                    setattr(
+                        report_cfg.env,
+                        "nested_shared_em_order_across_loads",
+                        np.asarray(shared_nested_em_order_across_loads, dtype=np.int32).copy(),
+                    )
+            else:
+                if hasattr(report_cfg.env, "nested_shared_ur_order_across_loads"):
+                    delattr(report_cfg.env, "nested_shared_ur_order_across_loads")
+                if hasattr(report_cfg.env, "nested_shared_em_order_across_loads"):
+                    delattr(report_cfg.env, "nested_shared_em_order_across_loads")
+            # Also keep topology/channel fixed per load bucket by default; only arrivals vary.
+            # Allow environment overrides for channel-seed sweep experiments.
+            freeze_assoc = _env_bool_override("SR_MAPPO_REPORT_FORCE_FREEZE_ASSOC", True)
+            freeze_channel = _env_bool_override("SR_MAPPO_REPORT_FORCE_FREEZE_CHANNEL", True)
+            setattr(report_cfg.env, "freeze_association_across_episodes", bool(freeze_assoc))
+            setattr(report_cfg.env, "freeze_channel_gains_across_episodes", bool(freeze_channel))
         if hasattr(base_sim, 'urllc_user_ratio'):
             sim_cfg.urllc_user_ratio = base_sim.urllc_user_ratio
+        if per_load_poisson_rate_override:
+            chosen_lambda = None
+            for k, v in per_load_poisson_rate_override.items():
+                if abs(float(k) - float(load)) <= 1.0e-9:
+                    chosen_lambda = float(v)
+                    break
+            if chosen_lambda is not None and hasattr(sim_cfg, "urllc_poisson_rate"):
+                sim_cfg.urllc_poisson_rate = float(chosen_lambda)
+                if hasattr(sim_cfg, "fixed_urllc_poisson_rate"):
+                    sim_cfg.fixed_urllc_poisson_rate = True
+                if hasattr(report_cfg.env, "urllc_poisson_rate"):
+                    report_cfg.env.urllc_poisson_rate = float(chosen_lambda)
+        chosen_nested_embb_served_cap = None
+        if per_load_nested_embb_served_cap_override:
+            for k, v in per_load_nested_embb_served_cap_override.items():
+                if abs(float(k) - float(load)) <= 1.0e-9:
+                    chosen_nested_embb_served_cap = int(v)
+                    break
+        if chosen_nested_embb_served_cap is not None:
+            setattr(
+                report_cfg.env,
+                "nested_embb_served_cap_for_load",
+                int(chosen_nested_embb_served_cap),
+            )
+        elif hasattr(report_cfg.env, "nested_embb_served_cap_for_load"):
+            delattr(report_cfg.env, "nested_embb_served_cap_for_load")
+        try:
+            nested_embb_max_new_per_load = int(
+                str(os.environ.get("SR_MAPPO_NESTED_EMBB_MAX_NEW_PER_LOAD", "0") or "0").strip()
+            )
+        except Exception:
+            nested_embb_max_new_per_load = 0
+        if nested_embb_max_new_per_load > 0:
+            setattr(report_cfg.env, "nested_embb_max_new_per_load", int(nested_embb_max_new_per_load))
+            if prev_nested_embb_served_count is not None:
+                setattr(
+                    report_cfg.env,
+                    "nested_prev_embb_served_count",
+                    int(prev_nested_embb_served_count),
+                )
+            elif hasattr(report_cfg.env, "nested_prev_embb_served_count"):
+                delattr(report_cfg.env, "nested_prev_embb_served_count")
+            if prev_nested_embb_subset_count is not None:
+                setattr(
+                    report_cfg.env,
+                    "nested_prev_embb_subset_count",
+                    int(prev_nested_embb_subset_count),
+                )
+            elif hasattr(report_cfg.env, "nested_prev_embb_subset_count"):
+                delattr(report_cfg.env, "nested_prev_embb_subset_count")
+        else:
+            if hasattr(report_cfg.env, "nested_embb_max_new_per_load"):
+                delattr(report_cfg.env, "nested_embb_max_new_per_load")
+            if hasattr(report_cfg.env, "nested_prev_embb_served_count"):
+                delattr(report_cfg.env, "nested_prev_embb_served_count")
+            if hasattr(report_cfg.env, "nested_prev_embb_subset_count"):
+                delattr(report_cfg.env, "nested_prev_embb_subset_count")
+        monotone_prerate_guard = bool(
+            str(os.environ.get("SR_MAPPO_NESTED_EMBB_PRERATE_GUARD", "0") or "0").strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
+        if monotone_prerate_guard and prev_nested_embb_selected_ids is not None:
+            setattr(
+                report_cfg.env,
+                "nested_prev_embb_selected_ids",
+                [int(x) for x in list(prev_nested_embb_selected_ids)],
+            )
+        elif hasattr(report_cfg.env, "nested_prev_embb_selected_ids"):
+            delattr(report_cfg.env, "nested_prev_embb_selected_ids")
+        _report_log(
+            f"[GREEDY][load={float(load):.1f}] effective_flags "
+            f"| nested_load={bool(getattr(sys_cfg, 'nested_load_from_max_users_enabled', False))} "
+            f"| nested_fixed_subset={bool(getattr(report_cfg.env, 'nested_fixed_user_subset_across_episodes', False))} "
+            f"| force_serving_hints_assoc={bool(getattr(sys_cfg, 'force_serving_hints_association', False))} "
+            f"| freeze_assoc={bool(getattr(report_cfg.env, 'freeze_association_across_episodes', False))} "
+            f"| freeze_channel={bool(getattr(report_cfg.env, 'freeze_channel_gains_across_episodes', False))}"
+        )
+        pure_sumrate_phase0 = bool(_env_bool_override("SR_MAPPO_REPORT_PURE_SUMRATE_COLD_START", False))
+        if (not pure_sumrate_phase0) and prev_phase0_owner_map is not None and prev_phase0_rate_cap_bps is not None:
+            setattr(
+                report_cfg.env,
+                "phase0_monotone_prev_owner_per_uav_rb",
+                np.asarray(prev_phase0_owner_map, dtype=np.int32).copy(),
+            )
+            setattr(report_cfg.env, "phase0_monotone_prev_rate_cap_bps", float(prev_phase0_rate_cap_bps))
+        else:
+            if hasattr(report_cfg.env, "phase0_monotone_prev_owner_per_uav_rb"):
+                delattr(report_cfg.env, "phase0_monotone_prev_owner_per_uav_rb")
+            if hasattr(report_cfg.env, "phase0_monotone_prev_rate_cap_bps"):
+                delattr(report_cfg.env, "phase0_monotone_prev_rate_cap_bps")
+        cross_mix_cap_bps = cross_mix_rate_cap_map_bps.get(float(load))
+        if cross_mix_cap_bps is not None and float(cross_mix_cap_bps) > 0.0:
+            setattr(report_cfg.env, "phase0_cross_mix_rate_cap_bps", float(cross_mix_cap_bps))
+        else:
+            if hasattr(report_cfg.env, "phase0_cross_mix_rate_cap_bps"):
+                delattr(report_cfg.env, "phase0_cross_mix_rate_cap_bps")
+        setattr(report_cfg.env, "phase0_monotone_rate_cap_tolerance_bps", float(1.0e3))
         env = SRMAPPOPhaseAEnv(sys_cfg, urllc_cfg, embb_cfg, algo_cfg, sim_cfg, report_cfg)
+        if continuity_prev_scheduled_mean is not None and continuity_prev_active_mean is not None:
+            setattr(env, "greedy_continuity_prev_scheduled_packets", float(continuity_prev_scheduled_mean))
+            setattr(env, "greedy_continuity_prev_active_packets", float(continuity_prev_active_mean))
+            _report_log(
+                f"[GREEDY][load={float(load):.1f}] continuity_seed "
+                f"| prev_scheduled_mean={float(continuity_prev_scheduled_mean):.3f} "
+                f"| prev_active_mean={float(continuity_prev_active_mean):.3f}"
+            )
         seed_base = _report_seed_base(load_idx, report_cfg)
+        def _episode_runner(ep: int, collect_trace: bool) -> Dict:
+            episode_seed = int(seed_base + ep)
+            with _temporary_shared_mother_scene_for_episode(
+                env=env,
+                load=float(load),
+                load_idx=int(load_idx),
+                episode_seed=episode_seed,
+            ):
+                return _run_env_episode_virtual_slots(
+                    env=env,
+                    model=None,
+                    cfg=report_cfg,
+                    seed=episode_seed,
+                    collect_trace=collect_trace,
+                    use_greedy=True,
+                    greedy_policy=greedy_policy_override,
+                    cache_tag=checkpoint_cache_tag,
+                    virtual_slots=virtual_slots_per_episode,
+                )
         episodes, representative[load] = _run_episode_batch_with_representative(
             episodes_per_load,
-            lambda ep, collect_trace: run_env_episode(
-                env,
-                model=None,
-                cfg=report_cfg,
-                seed=seed_base + ep,
-                collect_trace=collect_trace,
-                use_greedy=True,
-                greedy_policy="hard_feasible_throughput",
-                cache_tag=checkpoint_cache_tag,
-            ),
+            _episode_runner,
         )
+        metrics['episode_scene_audit'][str(float(load))] = _build_episode_scene_audit(episodes)
+        rep = representative.get(load, {}) or {}
+        try:
+            rep_snapshot_owner = rep.get("snapshot_owner_per_uav_rb", None)
+            if rep_snapshot_owner is not None:
+                prev_phase0_owner_map = np.asarray(rep_snapshot_owner, dtype=np.int32).copy()
+            pre_rates = [
+                float(
+                    ep.get(
+                        "embb_rate_pre_urllc_admission",
+                        ep.get("embb_rate", 0.0),
+                    ) or 0.0
+                )
+                for ep in episodes
+            ]
+            if pre_rates:
+                prev_phase0_rate_cap_bps = float(max(np.mean(pre_rates), 0.0) * 1.0e6)
+        except Exception:
+            prev_phase0_owner_map = None
+            prev_phase0_rate_cap_bps = None
+        try:
+            continuity_prev_scheduled_mean = float(
+                np.mean([float(ep.get("scheduled_packets", 0.0) or 0.0) for ep in episodes])
+            )
+            continuity_prev_active_mean = float(
+                np.mean([float(ep.get("active_packets", 0.0) or 0.0) for ep in episodes])
+            )
+        except Exception:
+            continuity_prev_scheduled_mean = None
+            continuity_prev_active_mean = None
+        if (
+            bool(getattr(report_cfg.env, "nested_fixed_user_subset_across_loads", False))
+            and (shared_nested_ur_order_across_loads is None or shared_nested_em_order_across_loads is None)
+        ):
+            try:
+                _shared_ur = getattr(env, "_nested_canonical_ur_order_cache", None)
+                _shared_em = getattr(env, "_nested_canonical_em_order_cache", None)
+                if _shared_ur is not None and _shared_em is not None:
+                    shared_nested_ur_order_across_loads = np.asarray(_shared_ur, dtype=np.int32).copy()
+                    shared_nested_em_order_across_loads = np.asarray(_shared_em, dtype=np.int32).copy()
+            except Exception:
+                shared_nested_ur_order_across_loads = None
+                shared_nested_em_order_across_loads = None
+        try:
+            served_counts = [
+                float(ep.get("embb_served_user_count", ep.get("embb_served_users", 0.0)) or 0.0)
+                for ep in episodes
+            ]
+            if served_counts:
+                prev_nested_embb_served_count = int(max(round(float(np.mean(served_counts))), 0))
+            selected_ids = {
+                int(x) for x in np.asarray(rep.get("nested_selected_user_indices", []), dtype=float).tolist()
+            }
+            selected_indices_arr = np.asarray(rep.get("nested_selected_user_indices", []), dtype=float)
+            if selected_indices_arr.size > 0:
+                _nu = int(sys_cfg.num_urllc_users)
+                embb_sel = [
+                    int(x)
+                    for x in selected_indices_arr[_nu:].tolist()
+                ]
+                prev_nested_embb_subset_count = int(len(embb_sel))
+                prev_nested_embb_selected_ids = [int(x) for x in embb_sel]
+        except Exception:
+            selected_ids = set()
+        new_ids = sorted(int(x) for x in (selected_ids - prev_selected_ids))
+        removed_ids = sorted(int(x) for x in (prev_selected_ids - selected_ids))
+        prev_selected_ids = set(selected_ids)
+        _report_log(
+            f"[GREEDY][load={float(load):.1f}] nested_audit "
+            f"| selected_users={len(selected_ids)} | newly_added={len(new_ids)} | removed_vs_prev={len(removed_ids)}"
+            f" | embb_served_ref={int(prev_nested_embb_served_count or 0)}"
+        )
+        if new_ids:
+            _report_log(f"[GREEDY][load={float(load):.1f}] nested_audit_new_ids={new_ids}")
+        if removed_ids:
+            _report_log(f"[GREEDY][load={float(load):.1f}] nested_audit_removed_ids={removed_ids}")
+        try:
+            embb_ids_per_uav = rep.get("audit_embb_global_ids_per_uav", [])
+            urllc_ids_per_uav = rep.get("audit_urllc_global_ids_per_uav", [])
+            embb_show = [
+                [int(x) for x in np.asarray(v, dtype=float).tolist()] for v in embb_ids_per_uav
+            ]
+            urllc_show = [
+                [int(x) for x in np.asarray(v, dtype=float).tolist()] for v in urllc_ids_per_uav
+            ]
+            _report_log(
+                f"[GREEDY][load={float(load):.1f}] per_uav_global_ids "
+                f"| embb={embb_show} | urllc={urllc_show}"
+            )
+        except Exception:
+            pass
+        try:
+            _ov = np.asarray(rep.get("per_uav_overlay_count", []), dtype=float).tolist()
+            _pu = np.asarray(rep.get("per_uav_puncture_count", []), dtype=float).tolist()
+            _ad = np.asarray(rep.get("per_uav_scheduled_urllc", []), dtype=float).tolist()
+            _report_log(
+                f"[GREEDY][load={float(load):.1f}] per_uav_mode_admit "
+                f"| overlay={_ov} | puncture={_pu} | admitted_urllc={_ad} "
+                f"| overlay_feasible_pairs={float(rep.get('overlay_feasible_pairs', 0.0)):.3f} "
+                f"| overlay_candidate_pairs={float(rep.get('overlay_candidate_pairs', 0.0)):.3f} "
+                f"| scheduled_packets={float(rep.get('scheduled_packets', 0.0)):.3f}"
+            )
+        except Exception:
+            pass
         # Per-episode greedy debug log (requested): arrivals/admission/throughput visibility.
         running_arrivals: List[float] = []
         running_admitted: List[float] = []
@@ -3463,6 +5272,10 @@ def run_hard_feasible_throughput_greedy_sweep(
         running_reset_total_sec: List[float] = []
         running_prepare_slot_ctx_sec: List[float] = []
         running_arrival_gen_sec: List[float] = []
+        running_reset_state_sec: List[float] = []
+        running_reset_greedy_ref_sec: List[float] = []
+        running_reset_build_obs_sec: List[float] = []
+        running_reset_misc_sec: List[float] = []
         running_action_select_sec: List[float] = []
         running_action_resolve_sec: List[float] = []
         running_env_step_sec: List[float] = []
@@ -3470,7 +5283,142 @@ def run_hard_feasible_throughput_greedy_sweep(
         running_hf_prefilter_sec: List[float] = []
         running_hf_fastpath_sec: List[float] = []
         running_hf_rescan_used: List[float] = []
+        running_step_profile_total_sec: List[float] = []
+        running_step_profile_obs_build_sec: List[float] = []
+        running_step_profile_obs_enum_sec: List[float] = []
+        running_step_profile_obs_candidate_enum_sec: List[float] = []
+        running_step_profile_obs_agent_loop_sec: List[float] = []
+        running_step_profile_obs_select_sec: List[float] = []
+        running_step_profile_obs_greedy_ref_sec: List[float] = []
+        running_step_profile_obs_local_sec: List[float] = []
+        running_step_profile_obs_global_sec: List[float] = []
+        running_step_profile_obs_mask_sec: List[float] = []
+        running_step_profile_obs_meta_sec: List[float] = []
+        running_step_profile_obs_pack_sec: List[float] = []
+        running_step_profile_obs_flatten_concat_sec: List[float] = []
+        running_step_profile_apply_action_sec: List[float] = []
+        running_step_profile_state_update_sec: List[float] = []
+        running_step_profile_reward_compute_sec: List[float] = []
+        running_step_profile_reward_delta_sec: List[float] = []
+        running_step_profile_reward_fullscan_sec: List[float] = []
+        running_step_profile_interference_sec: List[float] = []
+        running_step_profile_rate_sec: List[float] = []
+        running_step_profile_interference_calls: List[float] = []
+        running_step_profile_interference_cache_hit_calls: List[float] = []
+        running_step_profile_rate_calls: List[float] = []
         running_other_sec: List[float] = []
+        running_baseline_cache_hit_ratio: List[float] = []
+        running_virtual_slot_reset_count: List[float] = []
+        running_hf_raw_count: List[float] = []
+        running_hf_admissible_count: List[float] = []
+        running_hf_evaluated_count: List[float] = []
+        running_hf_feasible_count: List[float] = []
+        running_hf_selected_count: List[float] = []
+        running_hf_reject_gate_assoc: List[float] = []
+        running_hf_reject_gate_queue: List[float] = []
+        running_hf_reject_gate_mode: List[float] = []
+        running_hf_reject_gate_owner: List[float] = []
+        running_hf_reject_gate_rb_local: List[float] = []
+        running_hf_mode_overlay_rel_fail: List[float] = []
+        running_hf_mode_overlay_sic_fail: List[float] = []
+        running_hf_mode_gain_ratio_fail: List[float] = []
+        running_hf_mode_owner_pool_missing: List[float] = []
+        running_hf_mode_owner_unresolved_due_to_mode_fail: List[float] = []
+        running_hf_mode_puncture_rel_fail: List[float] = []
+        running_hf_mode_puncture_sic_fail: List[float] = []
+        running_hf_mode_puncture_owner_missing: List[float] = []
+        running_hf_owner_missing: List[float] = []
+        running_hf_owner_mismatch: List[float] = []
+        running_pre_mode_raw_pair: List[float] = []
+        running_pre_mode_overlay_rel: List[float] = []
+        running_pre_mode_overlay_sic: List[float] = []
+        running_pre_mode_gain_ratio: List[float] = []
+        running_pre_mode_owner_pool_missing: List[float] = []
+        running_pre_mode_owner_unresolved_due_to_mode_fail: List[float] = []
+        running_pre_mode_puncture_rel: List[float] = []
+        running_pre_mode_puncture_sic: List[float] = []
+        running_pre_mode_puncture_owner_missing: List[float] = []
+        running_pre_mode_owner_missing: List[float] = []
+        running_pre_mode_owner_mismatch: List[float] = []
+        running_sic_prior_pair_block_ratio: List[float] = []
+        running_sic_prior_saved_mode_fail_ratio: List[float] = []
+        running_sic_prior_owner_total_per_decision: List[float] = []
+        running_hf_gate_overlay_rel_fail_margin: List[float] = []
+        running_hf_gate_overlay_sic_fail_margin_db: List[float] = []
+        running_hf_gate_puncture_rel_fail_margin: List[float] = []
+        running_hf_gate_target_reliability: List[float] = []
+        running_hf_gate_target_sic_db: List[float] = []
+        running_hf_gate_overlay_rel_fail_snir_db: List[float] = []
+        running_hf_gate_overlay_sic_fail_post_sic_db: List[float] = []
+        running_hf_gate_puncture_rel_fail_snir_db: List[float] = []
+        running_hf_selected_minus_admitted_reliability: List[float] = []
+        running_hf_overlay_sic_trace_pre_sinr_db: List[float] = []
+        running_hf_overlay_sic_trace_post_sinr_db: List[float] = []
+        running_hf_overlay_sic_trace_noise_power: List[float] = []
+        running_hf_overlay_sic_trace_intercell_interference: List[float] = []
+        running_hf_overlay_sic_trace_local_interference: List[float] = []
+        running_hf_overlay_sic_trace_residual_interference: List[float] = []
+        running_hf_overlay_sic_trace_residual_ratio: List[float] = []
+        running_hf_overlay_presinr_raw_lt_m10: List[float] = []
+        running_hf_overlay_presinr_raw_m10_m6: List[float] = []
+        running_hf_overlay_presinr_raw_m6_m2: List[float] = []
+        running_hf_overlay_presinr_raw_ge_m2: List[float] = []
+        running_hf_overlay_presinr_kept_low_ratio: List[float] = []
+        running_hf_overlay_presinr_eval_low_ratio: List[float] = []
+        running_hf_quality_priority_enabled: List[float] = []
+        running_hf_quality_raw_high: List[float] = []
+        running_hf_quality_raw_borderline: List[float] = []
+        running_hf_quality_raw_risk: List[float] = []
+        running_hf_quality_kept_high: List[float] = []
+        running_hf_quality_kept_borderline: List[float] = []
+        running_hf_quality_kept_risk: List[float] = []
+        running_hf_quality_eval_high: List[float] = []
+        running_hf_quality_eval_borderline: List[float] = []
+        running_hf_quality_eval_risk: List[float] = []
+        running_hf_quality_selected_high: List[float] = []
+        running_hf_quality_selected_borderline: List[float] = []
+        running_hf_quality_selected_risk: List[float] = []
+        running_hf_overlay_blacklist_cell_ratio: List[float] = []
+        running_hf_overlay_blacklist_candidate_block_ratio: List[float] = []
+        running_hf_overlay_blacklist_saved_mode_fail_ratio: List[float] = []
+        running_hf_overlay_rb_reservation_enabled: List[float] = []
+        running_hf_overlay_rb_reservation_ratio: List[float] = []
+        running_hf_overlay_rb_reserved_count: List[float] = []
+        running_hf_overlay_rb_reserved_cell_ratio: List[float] = []
+        running_hf_overlay_rb_mode_block_ratio: List[float] = []
+        running_hf_overlay_rb_hard_block_enabled: List[float] = []
+        running_hf_overlay_rb_soft_preference_enabled: List[float] = []
+        running_hf_overlay_rb_soft_preference_applied_ratio: List[float] = []
+        running_guardrail_enabled: List[float] = []
+        running_guardrail_resample_count: List[float] = []
+        running_guardrail_pass_ratio: List[float] = []
+        running_guardrail_reject_overlay: List[float] = []
+        running_guardrail_reject_embb_minrate: List[float] = []
+        running_guardrail_reject_uav_imbalance: List[float] = []
+        running_guardrail_actual_overlay: List[float] = []
+        running_guardrail_actual_minrate: List[float] = []
+        running_guardrail_actual_imbalance: List[float] = []
+        running_guardrail_threshold_overlay: List[float] = []
+        running_guardrail_threshold_minrate: List[float] = []
+        running_guardrail_threshold_imbalance: List[float] = []
+        running_mother_topology_id: List[str] = []
+        running_mother_topology_seed: List[float] = []
+        running_same_channel_hash: List[str] = []
+        running_same_assoc_hash: List[str] = []
+        running_same_user_pool_hash: List[str] = []
+        running_mix_user_subset_hash: List[str] = []
+        running_embb_subset_hash: List[str] = []
+        running_same_feasible_graph_hash: List[str] = []
+        running_feasible_graph_id: List[str] = []
+        running_overlay_graph_hash: List[str] = []
+        running_channel_matrix_hash: List[str] = []
+        running_pathloss_hash: List[str] = []
+        running_shadowing_hash: List[str] = []
+        running_sic_order_hash: List[str] = []
+        running_repair_sequence_hash: List[str] = []
+        running_guardrail_pass_flag: List[float] = []
+        heartbeat_every = max(1, _env_int_override("SR_MAPPO_REPORT_HEARTBEAT_EVERY_EPISODES", REPORT_HEARTBEAT_EVERY_EPISODES))
+        load_loop_t0 = perf_counter()
         for ep_idx, episode in enumerate(episodes, start=1):
             arrivals = float(episode.get('active_packets', 0.0) or 0.0)
             admitted = float(episode.get('scheduled_packets', 0.0) or 0.0)
@@ -3490,6 +5438,10 @@ def run_hard_feasible_throughput_greedy_sweep(
             reset_total_sec = float(episode.get("profile_reset_total_sec", 0.0) or 0.0)
             prepare_slot_ctx_sec = float(episode.get("profile_prepare_slot_context_sec", 0.0) or 0.0)
             arrival_gen_sec = float(episode.get("profile_arrival_generation_sec", 0.0) or 0.0)
+            reset_state_sec = float(episode.get("profile_reset_episode_state_sec", 0.0) or 0.0)
+            reset_greedy_ref_sec = float(episode.get("profile_reset_greedy_reference_sec", 0.0) or 0.0)
+            reset_build_obs_sec = float(episode.get("profile_reset_build_observations_sec", 0.0) or 0.0)
+            reset_misc_sec = float(episode.get("profile_reset_misc_sec", 0.0) or 0.0)
             action_select_sec = float(episode.get("profile_action_select_sec", 0.0) or 0.0)
             action_resolve_sec = float(episode.get("profile_action_resolve_sec", 0.0) or 0.0)
             env_step_sec = float(episode.get("profile_env_step_sec", 0.0) or 0.0)
@@ -3497,6 +5449,161 @@ def run_hard_feasible_throughput_greedy_sweep(
             hf_prefilter_sec = float(episode.get("profile_hf_prefilter_sec", 0.0) or 0.0)
             hf_fastpath_sec = float(episode.get("profile_hf_fastpath_sec", 0.0) or 0.0)
             hf_rescan_used = float(episode.get("greedy_hf_rescan_used", 0.0) or 0.0)
+            step_profile_total_sec = float(episode.get("profile_step_total_sec", 0.0) or 0.0)
+            step_profile_obs_build_sec = float(episode.get("profile_step_obs_build_sec", 0.0) or 0.0)
+            step_profile_obs_enum_sec = float(episode.get("profile_obs_enum_sec", 0.0) or 0.0)
+            step_profile_obs_candidate_enum_sec = float(episode.get("profile_obs_candidate_enum_sec", step_profile_obs_enum_sec) or 0.0)
+            step_profile_obs_agent_loop_sec = float(episode.get("profile_obs_agent_loop_sec", 0.0) or 0.0)
+            step_profile_obs_select_sec = float(episode.get("profile_obs_select_sec", 0.0) or 0.0)
+            step_profile_obs_greedy_ref_sec = float(episode.get("profile_obs_greedy_ref_sec", 0.0) or 0.0)
+            step_profile_obs_local_sec = float(episode.get("profile_obs_local_sec", 0.0) or 0.0)
+            step_profile_obs_global_sec = float(episode.get("profile_obs_global_sec", 0.0) or 0.0)
+            step_profile_obs_mask_sec = float(episode.get("profile_obs_mask_sec", 0.0) or 0.0)
+            step_profile_obs_meta_sec = float(episode.get("profile_obs_meta_sec", 0.0) or 0.0)
+            step_profile_obs_pack_sec = float(episode.get("profile_obs_pack_sec", 0.0) or 0.0)
+            step_profile_obs_flatten_concat_sec = float(episode.get("profile_obs_flatten_concat_sec", 0.0) or 0.0)
+            step_profile_apply_action_sec = float(episode.get("profile_step_apply_action_sec", 0.0) or 0.0)
+            step_profile_state_update_sec = float(episode.get("profile_step_state_update_sec", 0.0) or 0.0)
+            step_profile_reward_compute_sec = float(episode.get("profile_step_reward_compute_sec", 0.0) or 0.0)
+            step_profile_reward_delta_sec = float(episode.get("profile_step_reward_delta_sec", 0.0) or 0.0)
+            step_profile_reward_fullscan_sec = float(episode.get("profile_step_reward_fullscan_sec", 0.0) or 0.0)
+            step_profile_interference_sec = float(episode.get("profile_interference_update_sec", 0.0) or 0.0)
+            step_profile_rate_sec = float(episode.get("profile_rate_update_sec", 0.0) or 0.0)
+            step_profile_interference_calls = float(episode.get("profile_interference_update_calls", 0.0) or 0.0)
+            step_profile_interference_cache_hit_calls = float(episode.get("profile_interference_cache_hit_calls", 0.0) or 0.0)
+            step_profile_rate_calls = float(episode.get("profile_rate_update_calls", 0.0) or 0.0)
+            baseline_cache_hit_ratio = float(episode.get("phase0_baseline_cache_hit_ratio", 0.0) or 0.0)
+            virtual_slot_reset_count = float(episode.get("virtual_slot_reset_count_per_episode", 1.0) or 1.0)
+            hf_raw_count = float(episode.get("greedy_hf_raw_count", 0.0) or 0.0)
+            hf_admissible_count = float(episode.get("greedy_hf_admissible_count", 0.0) or 0.0)
+            hf_evaluated_count = float(episode.get("greedy_hf_evaluated_count", 0.0) or 0.0)
+            hf_feasible_count = float(episode.get("greedy_hf_feasible_count", 0.0) or 0.0)
+            hf_selected_count = float(episode.get("greedy_hf_selected_count", 0.0) or 0.0)
+            hf_reject_gate_assoc = float(episode.get("greedy_hf_reject_by_gate_association", 0.0) or 0.0)
+            hf_reject_gate_queue = float(episode.get("greedy_hf_reject_by_gate_queue_active", 0.0) or 0.0)
+            hf_reject_gate_mode = float(episode.get("greedy_hf_reject_by_gate_mode_admissible", 0.0) or 0.0)
+            hf_reject_gate_owner = float(episode.get("greedy_hf_reject_by_gate_owner_admissible", 0.0) or 0.0)
+            hf_reject_gate_rb_local = float(episode.get("greedy_hf_reject_by_gate_rb_local", 0.0) or 0.0)
+            hf_mode_overlay_rel_fail = float(episode.get("greedy_hf_reject_by_mode_overlay_rel_fail", 0.0) or 0.0)
+            hf_mode_overlay_sic_fail = float(episode.get("greedy_hf_reject_by_mode_overlay_sic_fail", 0.0) or 0.0)
+            hf_mode_gain_ratio_fail = float(episode.get("greedy_hf_reject_by_mode_gain_ratio_fail", 0.0) or 0.0)
+            hf_mode_owner_pool_missing = float(episode.get("greedy_hf_reject_by_mode_owner_pool_missing", episode.get("greedy_hf_reject_by_mode_overlay_owner_missing", 0.0)) or 0.0)
+            hf_mode_owner_unresolved_due_to_mode_fail = float(episode.get("greedy_hf_reject_by_mode_owner_unresolved_due_to_mode_fail", 0.0) or 0.0)
+            hf_mode_puncture_rel_fail = float(episode.get("greedy_hf_reject_by_mode_puncture_rel_fail", 0.0) or 0.0)
+            hf_mode_puncture_sic_fail = float(episode.get("greedy_hf_reject_by_mode_puncture_sic_fail", 0.0) or 0.0)
+            hf_mode_puncture_owner_missing = float(episode.get("greedy_hf_reject_by_mode_puncture_owner_missing", 0.0) or 0.0)
+            hf_owner_missing = float(episode.get("greedy_hf_reject_by_owner_missing", 0.0) or 0.0)
+            hf_owner_mismatch = float(episode.get("greedy_hf_reject_by_owner_mismatch", 0.0) or 0.0)
+            pre_mode_raw_pair = float(episode.get("pre_mode_raw_pair_per_decision", 0.0) or 0.0)
+            pre_mode_overlay_rel = float(episode.get("pre_mode_overlay_rel_fail_per_decision", 0.0) or 0.0)
+            pre_mode_overlay_sic = float(episode.get("pre_mode_overlay_sic_fail_per_decision", 0.0) or 0.0)
+            pre_mode_gain_ratio = float(episode.get("pre_mode_gain_ratio_fail_per_decision", 0.0) or 0.0)
+            pre_mode_owner_pool_missing = float(episode.get("pre_mode_owner_pool_missing_per_decision", episode.get("pre_mode_overlay_owner_missing_per_decision", 0.0)) or 0.0)
+            pre_mode_owner_unresolved_due_to_mode_fail = float(episode.get("pre_mode_owner_unresolved_due_to_mode_fail_per_decision", 0.0) or 0.0)
+            pre_mode_puncture_rel = float(episode.get("pre_mode_puncture_rel_fail_per_decision", 0.0) or 0.0)
+            pre_mode_puncture_sic = float(episode.get("pre_mode_puncture_sic_fail_per_decision", 0.0) or 0.0)
+            pre_mode_puncture_owner_missing = float(episode.get("pre_mode_puncture_owner_missing_per_decision", 0.0) or 0.0)
+            pre_mode_owner_missing = float(episode.get("pre_mode_owner_missing_per_decision", 0.0) or 0.0)
+            pre_mode_owner_mismatch = float(episode.get("pre_mode_owner_mismatch_per_decision", 0.0) or 0.0)
+            sic_prior_pair_block_ratio = float(episode.get("sic_prior_pair_block_ratio", 0.0) or 0.0)
+            sic_prior_saved_mode_fail_ratio = float(episode.get("sic_prior_saved_mode_fail_ratio", 0.0) or 0.0)
+            sic_prior_owner_total_per_decision = float(episode.get("sic_prior_owner_total_per_decision", 0.0) or 0.0)
+            hf_gate_overlay_rel_fail_margin = float(episode.get("greedy_hf_gate_overlay_rel_fail_margin_mean", 0.0) or 0.0)
+            hf_gate_overlay_sic_fail_margin_db = float(episode.get("greedy_hf_gate_overlay_sic_fail_margin_db_mean", 0.0) or 0.0)
+            hf_gate_puncture_rel_fail_margin = float(episode.get("greedy_hf_gate_puncture_rel_fail_margin_mean", 0.0) or 0.0)
+            hf_gate_target_reliability = float(episode.get("greedy_hf_gate_target_reliability", 0.0) or 0.0)
+            hf_gate_target_sic_db = float(episode.get("greedy_hf_gate_target_sic_snir_db", 0.0) or 0.0)
+            hf_gate_overlay_rel_fail_snir_db = float(episode.get("greedy_hf_gate_overlay_rel_fail_snir_db_mean", 0.0) or 0.0)
+            hf_gate_overlay_sic_fail_post_sic_db = float(episode.get("greedy_hf_gate_overlay_sic_fail_post_sic_db_mean", 0.0) or 0.0)
+            hf_gate_puncture_rel_fail_snir_db = float(episode.get("greedy_hf_gate_puncture_rel_fail_snir_db_mean", 0.0) or 0.0)
+            selected_rel = float(episode.get("greedy_selected_urllc_reliability", 0.0) or 0.0)
+            admitted_rel = float(episode.get("admitted_urllc_reliability", episode.get("urllc_reliability", 0.0)) or 0.0)
+            selected_minus_admitted_rel = float(selected_rel - admitted_rel)
+            overlay_sic_trace_pre = float(episode.get("greedy_hf_overlay_sic_trace_pre_sinr_db_mean", 0.0) or 0.0)
+            overlay_sic_trace_post = float(episode.get("greedy_hf_overlay_sic_trace_post_sinr_db_mean", 0.0) or 0.0)
+            overlay_sic_trace_noise = float(episode.get("greedy_hf_overlay_sic_trace_noise_power_mean", 0.0) or 0.0)
+            overlay_sic_trace_intercell = float(episode.get("greedy_hf_overlay_sic_trace_intercell_interference_mean", 0.0) or 0.0)
+            overlay_sic_trace_local = float(episode.get("greedy_hf_overlay_sic_trace_local_interference_mean", 0.0) or 0.0)
+            overlay_sic_trace_residual = float(episode.get("greedy_hf_overlay_sic_trace_residual_sic_interference_mean", 0.0) or 0.0)
+            overlay_sic_trace_ratio = float(episode.get("greedy_hf_overlay_sic_trace_sic_residual_ratio", 0.0) or 0.0)
+            overlay_presinr_raw_lt_m10 = float(episode.get("greedy_hf_overlay_presinr_raw_lt_m10", 0.0) or 0.0)
+            overlay_presinr_raw_m10_m6 = float(episode.get("greedy_hf_overlay_presinr_raw_m10_m6", 0.0) or 0.0)
+            overlay_presinr_raw_m6_m2 = float(episode.get("greedy_hf_overlay_presinr_raw_m6_m2", 0.0) or 0.0)
+            overlay_presinr_raw_ge_m2 = float(episode.get("greedy_hf_overlay_presinr_raw_ge_m2", 0.0) or 0.0)
+            overlay_presinr_kept_low_ratio = float(episode.get("greedy_hf_overlay_presinr_kept_low_ratio", 0.0) or 0.0)
+            overlay_presinr_eval_low_ratio = float(episode.get("greedy_hf_overlay_presinr_eval_low_ratio", 0.0) or 0.0)
+            quality_priority_enabled = float(episode.get("greedy_hf_quality_priority_enabled", 0.0) or 0.0)
+            quality_raw_high = float(episode.get("greedy_hf_quality_raw_high", 0.0) or 0.0)
+            quality_raw_borderline = float(episode.get("greedy_hf_quality_raw_borderline", 0.0) or 0.0)
+            quality_raw_risk = float(episode.get("greedy_hf_quality_raw_risk", 0.0) or 0.0)
+            quality_kept_high = float(episode.get("greedy_hf_quality_kept_high", 0.0) or 0.0)
+            quality_kept_borderline = float(episode.get("greedy_hf_quality_kept_borderline", 0.0) or 0.0)
+            quality_kept_risk = float(episode.get("greedy_hf_quality_kept_risk", 0.0) or 0.0)
+            quality_eval_high = float(episode.get("greedy_hf_quality_eval_high", 0.0) or 0.0)
+            quality_eval_borderline = float(episode.get("greedy_hf_quality_eval_borderline", 0.0) or 0.0)
+            quality_eval_risk = float(episode.get("greedy_hf_quality_eval_risk", 0.0) or 0.0)
+            quality_selected_high = float(episode.get("greedy_hf_quality_selected_high", 0.0) or 0.0)
+            quality_selected_borderline = float(episode.get("greedy_hf_quality_selected_borderline", 0.0) or 0.0)
+            quality_selected_risk = float(episode.get("greedy_hf_quality_selected_risk", 0.0) or 0.0)
+            overlay_blacklist_cell_ratio = float(episode.get("greedy_hf_overlay_blacklist_cell_ratio", 0.0) or 0.0)
+            overlay_blacklist_candidate_block_ratio = float(
+                episode.get("greedy_hf_overlay_blacklist_candidate_block_ratio", 0.0) or 0.0
+            )
+            overlay_blacklist_saved_mode_fail_ratio = float(
+                episode.get("greedy_hf_overlay_blacklist_saved_mode_fail_ratio", 0.0) or 0.0
+            )
+            overlay_rb_reservation_enabled = float(
+                episode.get("greedy_hf_overlay_only_rb_reservation_enabled", 0.0) or 0.0
+            )
+            overlay_rb_reservation_ratio = float(
+                episode.get("greedy_hf_overlay_only_rb_reservation_ratio", 0.0) or 0.0
+            )
+            overlay_rb_reserved_count = float(
+                episode.get("greedy_hf_overlay_only_rb_reserved_count", 0.0) or 0.0
+            )
+            overlay_rb_reserved_cell_ratio = float(
+                episode.get("greedy_hf_overlay_only_rb_reserved_cell_ratio", 0.0) or 0.0
+            )
+            overlay_rb_mode_block_ratio = float(
+                episode.get("greedy_hf_overlay_only_rb_mode_block_ratio", 0.0) or 0.0
+            )
+            overlay_rb_hard_block_enabled = float(
+                episode.get("greedy_hf_overlay_only_rb_hard_block_enabled", 0.0) or 0.0
+            )
+            overlay_rb_soft_preference_enabled = float(
+                episode.get("greedy_hf_overlay_only_rb_soft_preference_enabled", 0.0) or 0.0
+            )
+            overlay_rb_soft_preference_applied_ratio = float(
+                episode.get("greedy_hf_overlay_only_rb_soft_preference_applied_ratio", 0.0) or 0.0
+            )
+            guardrail_enabled = float(episode.get("guardrail_enabled", 0.0) or 0.0)
+            guardrail_resample_count = float(episode.get("guardrail_resample_count", 0.0) or 0.0)
+            guardrail_pass_ratio = float(episode.get("guardrail_pass_ratio", 1.0) or 0.0)
+            guardrail_reject_overlay = float(episode.get("guardrail_reject_reason_overlay", 0.0) or 0.0)
+            guardrail_reject_embb_minrate = float(episode.get("guardrail_reject_reason_embb_minrate", 0.0) or 0.0)
+            guardrail_reject_uav_imbalance = float(episode.get("guardrail_reject_reason_uav_imbalance", 0.0) or 0.0)
+            guardrail_actual_overlay = float(episode.get("guardrail_actual_overlay_feasible_ratio", 0.0) or 0.0)
+            guardrail_actual_minrate = float(episode.get("guardrail_actual_embb_minrate_ratio", 0.0) or 0.0)
+            guardrail_actual_imbalance = float(episode.get("guardrail_actual_uav_load_imbalance", 0.0) or 0.0)
+            guardrail_threshold_overlay = float(episode.get("guardrail_threshold_overlay", 0.0) or 0.0)
+            guardrail_threshold_minrate = float(episode.get("guardrail_threshold_embb_minrate", 0.0) or 0.0)
+            guardrail_threshold_imbalance = float(episode.get("guardrail_threshold_uav_imbalance", 0.0) or 0.0)
+            mother_topology_id = str(episode.get("mother_topology_id", "") or "")
+            mother_topology_seed = float(episode.get("mother_topology_seed", 0.0) or 0.0)
+            same_channel_hash = str(episode.get("same_channel_hash", "") or "")
+            same_assoc_hash = str(episode.get("same_assoc_hash", "") or "")
+            same_user_pool_hash = str(episode.get("same_user_pool_hash", "") or "")
+            mix_user_subset_hash = str(episode.get("mix_user_subset_hash", "") or "")
+            embb_subset_hash = str(episode.get("embb_subset_hash", "") or "")
+            same_feasible_graph_hash = str(episode.get("same_feasible_graph_hash", "") or "")
+            feasible_graph_id = str(episode.get("feasible_graph_id", "") or "")
+            overlay_graph_hash = str(episode.get("overlay_graph_hash", "") or "")
+            channel_matrix_hash = str(episode.get("channel_matrix_hash", "") or "")
+            pathloss_hash = str(episode.get("pathloss_hash", "") or "")
+            shadowing_hash = str(episode.get("shadowing_hash", "") or "")
+            sic_order_hash = str(episode.get("sic_order_hash", "") or "")
+            repair_sequence_hash = str(episode.get("repair_sequence_hash", "") or "")
+            guardrail_pass_flag = float(episode.get("guardrail_pass", episode.get("guardrail_pass_ratio", 0.0)) or 0.0)
             accounted_major_sec = reset_total_sec + action_select_sec + action_resolve_sec + env_step_sec
             other_sec = max(episode_sec - accounted_major_sec, 0.0)
             running_arrivals.append(arrivals)
@@ -3511,6 +5618,10 @@ def run_hard_feasible_throughput_greedy_sweep(
             running_reset_total_sec.append(reset_total_sec)
             running_prepare_slot_ctx_sec.append(prepare_slot_ctx_sec)
             running_arrival_gen_sec.append(arrival_gen_sec)
+            running_reset_state_sec.append(reset_state_sec)
+            running_reset_greedy_ref_sec.append(reset_greedy_ref_sec)
+            running_reset_build_obs_sec.append(reset_build_obs_sec)
+            running_reset_misc_sec.append(reset_misc_sec)
             running_action_select_sec.append(action_select_sec)
             running_action_resolve_sec.append(action_resolve_sec)
             running_env_step_sec.append(env_step_sec)
@@ -3518,13 +5629,156 @@ def run_hard_feasible_throughput_greedy_sweep(
             running_hf_prefilter_sec.append(hf_prefilter_sec)
             running_hf_fastpath_sec.append(hf_fastpath_sec)
             running_hf_rescan_used.append(hf_rescan_used)
+            running_step_profile_total_sec.append(step_profile_total_sec)
+            running_step_profile_obs_build_sec.append(step_profile_obs_build_sec)
+            running_step_profile_obs_enum_sec.append(step_profile_obs_enum_sec)
+            running_step_profile_obs_candidate_enum_sec.append(step_profile_obs_candidate_enum_sec)
+            running_step_profile_obs_agent_loop_sec.append(step_profile_obs_agent_loop_sec)
+            running_step_profile_obs_select_sec.append(step_profile_obs_select_sec)
+            running_step_profile_obs_greedy_ref_sec.append(step_profile_obs_greedy_ref_sec)
+            running_step_profile_obs_local_sec.append(step_profile_obs_local_sec)
+            running_step_profile_obs_global_sec.append(step_profile_obs_global_sec)
+            running_step_profile_obs_mask_sec.append(step_profile_obs_mask_sec)
+            running_step_profile_obs_meta_sec.append(step_profile_obs_meta_sec)
+            running_step_profile_obs_pack_sec.append(step_profile_obs_pack_sec)
+            running_step_profile_obs_flatten_concat_sec.append(step_profile_obs_flatten_concat_sec)
+            running_step_profile_apply_action_sec.append(step_profile_apply_action_sec)
+            running_step_profile_state_update_sec.append(step_profile_state_update_sec)
+            running_step_profile_reward_compute_sec.append(step_profile_reward_compute_sec)
+            running_step_profile_reward_delta_sec.append(step_profile_reward_delta_sec)
+            running_step_profile_reward_fullscan_sec.append(step_profile_reward_fullscan_sec)
+            running_step_profile_interference_sec.append(step_profile_interference_sec)
+            running_step_profile_rate_sec.append(step_profile_rate_sec)
+            running_step_profile_interference_calls.append(step_profile_interference_calls)
+            running_step_profile_interference_cache_hit_calls.append(step_profile_interference_cache_hit_calls)
+            running_step_profile_rate_calls.append(step_profile_rate_calls)
             running_other_sec.append(other_sec)
+            running_baseline_cache_hit_ratio.append(baseline_cache_hit_ratio)
+            running_virtual_slot_reset_count.append(virtual_slot_reset_count)
+            running_hf_raw_count.append(hf_raw_count)
+            running_hf_admissible_count.append(hf_admissible_count)
+            running_hf_evaluated_count.append(hf_evaluated_count)
+            running_hf_feasible_count.append(hf_feasible_count)
+            running_hf_selected_count.append(hf_selected_count)
+            running_hf_reject_gate_assoc.append(hf_reject_gate_assoc)
+            running_hf_reject_gate_queue.append(hf_reject_gate_queue)
+            running_hf_reject_gate_mode.append(hf_reject_gate_mode)
+            running_hf_reject_gate_owner.append(hf_reject_gate_owner)
+            running_hf_reject_gate_rb_local.append(hf_reject_gate_rb_local)
+            running_hf_mode_overlay_rel_fail.append(hf_mode_overlay_rel_fail)
+            running_hf_mode_overlay_sic_fail.append(hf_mode_overlay_sic_fail)
+            running_hf_mode_gain_ratio_fail.append(hf_mode_gain_ratio_fail)
+            running_hf_mode_owner_pool_missing.append(hf_mode_owner_pool_missing)
+            running_hf_mode_owner_unresolved_due_to_mode_fail.append(hf_mode_owner_unresolved_due_to_mode_fail)
+            running_hf_mode_puncture_rel_fail.append(hf_mode_puncture_rel_fail)
+            running_hf_mode_puncture_sic_fail.append(hf_mode_puncture_sic_fail)
+            running_hf_mode_puncture_owner_missing.append(hf_mode_puncture_owner_missing)
+            running_hf_owner_missing.append(hf_owner_missing)
+            running_hf_owner_mismatch.append(hf_owner_mismatch)
+            running_pre_mode_raw_pair.append(pre_mode_raw_pair)
+            running_pre_mode_overlay_rel.append(pre_mode_overlay_rel)
+            running_pre_mode_overlay_sic.append(pre_mode_overlay_sic)
+            running_pre_mode_gain_ratio.append(pre_mode_gain_ratio)
+            running_pre_mode_owner_pool_missing.append(pre_mode_owner_pool_missing)
+            running_pre_mode_owner_unresolved_due_to_mode_fail.append(pre_mode_owner_unresolved_due_to_mode_fail)
+            running_pre_mode_puncture_rel.append(pre_mode_puncture_rel)
+            running_pre_mode_puncture_sic.append(pre_mode_puncture_sic)
+            running_pre_mode_puncture_owner_missing.append(pre_mode_puncture_owner_missing)
+            running_pre_mode_owner_missing.append(pre_mode_owner_missing)
+            running_pre_mode_owner_mismatch.append(pre_mode_owner_mismatch)
+            running_sic_prior_pair_block_ratio.append(sic_prior_pair_block_ratio)
+            running_sic_prior_saved_mode_fail_ratio.append(sic_prior_saved_mode_fail_ratio)
+            running_sic_prior_owner_total_per_decision.append(sic_prior_owner_total_per_decision)
+            running_hf_gate_overlay_rel_fail_margin.append(hf_gate_overlay_rel_fail_margin)
+            running_hf_gate_overlay_sic_fail_margin_db.append(hf_gate_overlay_sic_fail_margin_db)
+            running_hf_gate_puncture_rel_fail_margin.append(hf_gate_puncture_rel_fail_margin)
+            running_hf_gate_target_reliability.append(hf_gate_target_reliability)
+            running_hf_gate_target_sic_db.append(hf_gate_target_sic_db)
+            running_hf_gate_overlay_rel_fail_snir_db.append(hf_gate_overlay_rel_fail_snir_db)
+            running_hf_gate_overlay_sic_fail_post_sic_db.append(hf_gate_overlay_sic_fail_post_sic_db)
+            running_hf_gate_puncture_rel_fail_snir_db.append(hf_gate_puncture_rel_fail_snir_db)
+            running_hf_selected_minus_admitted_reliability.append(selected_minus_admitted_rel)
+            running_hf_overlay_sic_trace_pre_sinr_db.append(overlay_sic_trace_pre)
+            running_hf_overlay_sic_trace_post_sinr_db.append(overlay_sic_trace_post)
+            running_hf_overlay_sic_trace_noise_power.append(overlay_sic_trace_noise)
+            running_hf_overlay_sic_trace_intercell_interference.append(overlay_sic_trace_intercell)
+            running_hf_overlay_sic_trace_local_interference.append(overlay_sic_trace_local)
+            running_hf_overlay_sic_trace_residual_interference.append(overlay_sic_trace_residual)
+            running_hf_overlay_sic_trace_residual_ratio.append(overlay_sic_trace_ratio)
+            running_hf_overlay_presinr_raw_lt_m10.append(overlay_presinr_raw_lt_m10)
+            running_hf_overlay_presinr_raw_m10_m6.append(overlay_presinr_raw_m10_m6)
+            running_hf_overlay_presinr_raw_m6_m2.append(overlay_presinr_raw_m6_m2)
+            running_hf_overlay_presinr_raw_ge_m2.append(overlay_presinr_raw_ge_m2)
+            running_hf_overlay_presinr_kept_low_ratio.append(overlay_presinr_kept_low_ratio)
+            running_hf_overlay_presinr_eval_low_ratio.append(overlay_presinr_eval_low_ratio)
+            running_hf_quality_priority_enabled.append(quality_priority_enabled)
+            running_hf_quality_raw_high.append(quality_raw_high)
+            running_hf_quality_raw_borderline.append(quality_raw_borderline)
+            running_hf_quality_raw_risk.append(quality_raw_risk)
+            running_hf_quality_kept_high.append(quality_kept_high)
+            running_hf_quality_kept_borderline.append(quality_kept_borderline)
+            running_hf_quality_kept_risk.append(quality_kept_risk)
+            running_hf_quality_eval_high.append(quality_eval_high)
+            running_hf_quality_eval_borderline.append(quality_eval_borderline)
+            running_hf_quality_eval_risk.append(quality_eval_risk)
+            running_hf_quality_selected_high.append(quality_selected_high)
+            running_hf_quality_selected_borderline.append(quality_selected_borderline)
+            running_hf_quality_selected_risk.append(quality_selected_risk)
+            running_hf_overlay_blacklist_cell_ratio.append(overlay_blacklist_cell_ratio)
+            running_hf_overlay_blacklist_candidate_block_ratio.append(overlay_blacklist_candidate_block_ratio)
+            running_hf_overlay_blacklist_saved_mode_fail_ratio.append(overlay_blacklist_saved_mode_fail_ratio)
+            running_hf_overlay_rb_reservation_enabled.append(overlay_rb_reservation_enabled)
+            running_hf_overlay_rb_reservation_ratio.append(overlay_rb_reservation_ratio)
+            running_hf_overlay_rb_reserved_count.append(overlay_rb_reserved_count)
+            running_hf_overlay_rb_reserved_cell_ratio.append(overlay_rb_reserved_cell_ratio)
+            running_hf_overlay_rb_mode_block_ratio.append(overlay_rb_mode_block_ratio)
+            running_hf_overlay_rb_hard_block_enabled.append(overlay_rb_hard_block_enabled)
+            running_hf_overlay_rb_soft_preference_enabled.append(overlay_rb_soft_preference_enabled)
+            running_hf_overlay_rb_soft_preference_applied_ratio.append(overlay_rb_soft_preference_applied_ratio)
+            running_guardrail_enabled.append(guardrail_enabled)
+            running_guardrail_resample_count.append(guardrail_resample_count)
+            running_guardrail_pass_ratio.append(guardrail_pass_ratio)
+            running_guardrail_reject_overlay.append(guardrail_reject_overlay)
+            running_guardrail_reject_embb_minrate.append(guardrail_reject_embb_minrate)
+            running_guardrail_reject_uav_imbalance.append(guardrail_reject_uav_imbalance)
+            running_guardrail_actual_overlay.append(guardrail_actual_overlay)
+            running_guardrail_actual_minrate.append(guardrail_actual_minrate)
+            running_guardrail_actual_imbalance.append(guardrail_actual_imbalance)
+            running_guardrail_threshold_overlay.append(guardrail_threshold_overlay)
+            running_guardrail_threshold_minrate.append(guardrail_threshold_minrate)
+            running_guardrail_threshold_imbalance.append(guardrail_threshold_imbalance)
+            running_mother_topology_id.append(mother_topology_id)
+            running_mother_topology_seed.append(mother_topology_seed)
+            running_same_channel_hash.append(same_channel_hash)
+            running_same_assoc_hash.append(same_assoc_hash)
+            running_same_user_pool_hash.append(same_user_pool_hash)
+            running_mix_user_subset_hash.append(mix_user_subset_hash)
+            running_embb_subset_hash.append(embb_subset_hash)
+            running_same_feasible_graph_hash.append(same_feasible_graph_hash)
+            running_feasible_graph_id.append(feasible_graph_id)
+            running_overlay_graph_hash.append(overlay_graph_hash)
+            running_channel_matrix_hash.append(channel_matrix_hash)
+            running_pathloss_hash.append(pathloss_hash)
+            running_shadowing_hash.append(shadowing_hash)
+            running_sic_order_hash.append(sic_order_hash)
+            running_repair_sequence_hash.append(repair_sequence_hash)
+            running_guardrail_pass_flag.append(guardrail_pass_flag)
             if verbose_per_episode:
                 _report_log(
                     f"[GREEDY][load={float(load):.1f}] episode {ep_idx}/{int(episodes_per_load)} "
                     f"| users(urllc/embb)={urllc_users}/{embb_users} "
                     f"| arrivals={arrivals:.2f} | admitted={admitted:.2f} | admission={admission_ratio:.4f} "
                     f"| embb_rate={embb_rate_mbps:.3f} Mbps | urllc_tp={urllc_tp_mbps:.3f} Mbps"
+                )
+            if (ep_idx % heartbeat_every == 0) or (ep_idx == int(episodes_per_load)):
+                elapsed_sec = max(perf_counter() - load_loop_t0, 1.0e-12)
+                avg_ep_sec = float(elapsed_sec / max(ep_idx, 1))
+                remain_ep = max(int(episodes_per_load) - int(ep_idx), 0)
+                eta_sec = float(avg_ep_sec * remain_ep)
+                _report_log(
+                    f"[GREEDY][load={float(load):.1f}] progress {ep_idx}/{int(episodes_per_load)} "
+                    f"| elapsed={elapsed_sec:.1f}s | avg_ep={avg_ep_sec:.3f}s | eta={eta_sec:.1f}s "
+                    f"| arrivals_mean={float(np.mean(running_arrivals)):.2f} | admitted_mean={float(np.mean(running_admitted)):.2f}"
                 )
             if ep_idx % 10 == 0:
                 mean_urllc_users = float(np.mean(running_urllc_users)) if running_urllc_users else 0.0
@@ -3549,15 +5803,90 @@ def run_hard_feasible_throughput_greedy_sweep(
                 )
                 _report_log(
                     f"[GREEDY][load={float(load):.1f}] time_breakdown_detail(1-{ep_idx}) "
-                    f"| reset(slot_ctx/arrival/other)="
+                    f"| reset(state/slot_ctx/arrival/greedy_ref/build_obs/misc)="
+                    f"{float(np.sum(running_reset_state_sec)) / total_episode_sec:.3%}/"
                     f"{float(np.sum(running_prepare_slot_ctx_sec)) / total_episode_sec:.3%}/"
                     f"{float(np.sum(running_arrival_gen_sec)) / total_episode_sec:.3%}/"
-                    f"{max(float(np.sum(running_reset_total_sec)) - float(np.sum(running_prepare_slot_ctx_sec)) - float(np.sum(running_arrival_gen_sec)), 0.0) / total_episode_sec:.3%} "
+                    f"{float(np.sum(running_reset_greedy_ref_sec)) / total_episode_sec:.3%}/"
+                    f"{float(np.sum(running_reset_build_obs_sec)) / total_episode_sec:.3%}/"
+                    f"{float(np.sum(running_reset_misc_sec)) / total_episode_sec:.3%} "
                     f"| action(hf_prefilter/hf_eval/hf_fastpath/other)="
                     f"{total_hf_prefilter_sec / total_episode_sec:.3%}/"
                     f"{total_hf_eval_sec / total_episode_sec:.3%}/"
                     f"{total_hf_fastpath_sec / total_episode_sec:.3%}/"
                     f"{total_action_other_sec / total_episode_sec:.3%}"
+                )
+                _report_log(
+                    f"[GREEDY][load={float(load):.1f}] env_step_breakdown(1-{ep_idx}) "
+                    f"| step(obs_build/apply/state/reward/interference/rate)="
+                    f"{float(np.sum(running_step_profile_obs_build_sec)) / total_episode_sec:.3%}/"
+                    f"{float(np.sum(running_step_profile_apply_action_sec)) / total_episode_sec:.3%}/"
+                    f"{float(np.sum(running_step_profile_state_update_sec)) / total_episode_sec:.3%}/"
+                    f"{float(np.sum(running_step_profile_reward_compute_sec)) / total_episode_sec:.3%}/"
+                    f"{float(np.sum(running_step_profile_interference_sec)) / total_episode_sec:.3%}/"
+                    f"{float(np.sum(running_step_profile_rate_sec)) / total_episode_sec:.3%} "
+                    f"| calls(interference/rate)="
+                    f"{float(np.sum(running_step_profile_interference_calls)):.0f}/"
+                    f"{float(np.sum(running_step_profile_rate_calls)):.0f}"
+                    f" | cache_hits(interference)="
+                    f"{float(np.sum(running_step_profile_interference_cache_hit_calls)):.0f}"
+                )
+                reward_total_sec = float(np.sum(running_step_profile_reward_compute_sec))
+                reward_delta_sec = float(np.sum(running_step_profile_reward_delta_sec))
+                reward_fullscan_sec = float(np.sum(running_step_profile_reward_fullscan_sec))
+                reward_other_sec = max(reward_total_sec - reward_delta_sec - reward_fullscan_sec, 0.0)
+                reward_denom = max(reward_total_sec, 1.0e-12)
+                _report_log(
+                    f"[GREEDY][load={float(load):.1f}] reward_sub_breakdown(1-{ep_idx}) "
+                    f"| reward(delta/fullscan/other)="
+                    f"{reward_delta_sec / reward_denom:.3%}/"
+                    f"{reward_fullscan_sec / reward_denom:.3%}/"
+                    f"{reward_other_sec / reward_denom:.3%}"
+                )
+                obs_total_sec = float(np.sum(running_step_profile_obs_build_sec))
+                obs_select_sec = float(np.sum(running_step_profile_obs_select_sec))
+                obs_greedy_ref_sec = float(np.sum(running_step_profile_obs_greedy_ref_sec))
+                obs_local_sec = float(np.sum(running_step_profile_obs_local_sec))
+                obs_global_sec = float(np.sum(running_step_profile_obs_global_sec))
+                obs_mask_sec = float(np.sum(running_step_profile_obs_mask_sec))
+                # enum_other = obs_build minus already-explicit major observation builders.
+                obs_enum_other_sec = max(
+                    obs_total_sec - (
+                        obs_select_sec
+                        + obs_greedy_ref_sec
+                        + obs_local_sec
+                        + obs_global_sec
+                        + obs_mask_sec
+                    ),
+                    0.0,
+                )
+                obs_candidate_enum_sec = float(np.sum(running_step_profile_obs_candidate_enum_sec))
+                obs_agent_loop_sec = float(np.sum(running_step_profile_obs_agent_loop_sec))
+                obs_pack_sec = float(np.sum(running_step_profile_obs_pack_sec))
+                obs_flatten_concat_sec = float(np.sum(running_step_profile_obs_flatten_concat_sec))
+                obs_metadata_sec = float(np.sum(running_step_profile_obs_meta_sec))
+                obs_other_sec = max(
+                    obs_enum_other_sec - (
+                        obs_agent_loop_sec
+                        + obs_candidate_enum_sec
+                        + obs_pack_sec
+                        + obs_flatten_concat_sec
+                        + obs_metadata_sec
+                    ),
+                    0.0,
+                )
+                obs_denom = max(obs_enum_other_sec, 1.0e-12)
+                _report_log(
+                    f"[GREEDY][load={float(load):.1f}] obs_enum_other_sub_breakdown(1-{ep_idx}) "
+                    f"| obs_enum_other(obs_build-local-global-mask-select-greedy_ref)="
+                    f"{obs_enum_other_sec / max(obs_total_sec, 1.0e-12):.3%} of obs_build "
+                    f"| obs(agent_loop/candidate_enum/obs_pack/flatten_concat/metadata/other)="
+                    f"{obs_agent_loop_sec / obs_denom:.3%}/"
+                    f"{obs_candidate_enum_sec / obs_denom:.3%}/"
+                    f"{obs_pack_sec / obs_denom:.3%}/"
+                    f"{obs_flatten_concat_sec / obs_denom:.3%}/"
+                    f"{obs_metadata_sec / obs_denom:.3%}/"
+                    f"{obs_other_sec / obs_denom:.3%}"
                 )
                 _report_log(
                     f"[GREEDY][load={float(load):.1f}] episodes 1-{ep_idx} summary "
@@ -3570,8 +5899,478 @@ def run_hard_feasible_throughput_greedy_sweep(
                     f"| urllc_tp_mean={float(np.mean(running_urllc_tp_mbps)):.3f} Mbps "
                     f"| budget_used_ratio_mean={float(np.mean(running_budget_used_ratio)):.4f} "
                     f"| budget_used_ratio_max={float(np.max(running_budget_used_ratio)):.4f} "
-                    f"| hf_rescan_ratio={float(np.mean(running_hf_rescan_used)):.4f}"
+                    f"| hf_rescan_ratio={float(np.mean(running_hf_rescan_used)):.4f} "
+                    f"| baseline_cache_hit_ratio={float(np.mean(running_baseline_cache_hit_ratio)):.4f} "
+                    f"| virtual_slot_reset_count_per_episode={float(np.mean(running_virtual_slot_reset_count)):.2f}"
                 )
+                _report_log(
+                    f"[GREEDY][load={float(load):.1f}] ssot_invariant(1-{ep_idx}) "
+                    f"| raw/admissible/evaluated/feasible/selected="
+                    f"{float(np.mean(running_hf_raw_count)):.2f}/"
+                    f"{float(np.mean(running_hf_admissible_count)):.2f}/"
+                    f"{float(np.mean(running_hf_evaluated_count)):.2f}/"
+                    f"{float(np.mean(running_hf_feasible_count)):.2f}/"
+                    f"{float(np.mean(running_hf_selected_count)):.2f} "
+                    f"| reject_by_gate(association/queue_active/mode/owner/rb_local)="
+                    f"{float(np.mean(running_hf_reject_gate_assoc)):.2f}/"
+                    f"{float(np.mean(running_hf_reject_gate_queue)):.2f}/"
+                    f"{float(np.mean(running_hf_reject_gate_mode)):.2f}/"
+                    f"{float(np.mean(running_hf_reject_gate_owner)):.2f}/"
+                    f"{float(np.mean(running_hf_reject_gate_rb_local)):.2f}"
+                )
+                _report_log(
+                    f"[GREEDY][load={float(load):.1f}] ssot_reason_breakdown(1-{ep_idx}) "
+                    f"| mode(overlay_rel/overlay_sic/gain_ratio/owner_pool_missing/owner_unresolved_due_to_mode_fail/puncture_rel/puncture_sic/puncture_owner_missing)="
+                    f"{float(np.mean(running_hf_mode_overlay_rel_fail)):.2f}/"
+                    f"{float(np.mean(running_hf_mode_overlay_sic_fail)):.2f}/"
+                    f"{float(np.mean(running_hf_mode_gain_ratio_fail)):.2f}/"
+                    f"{float(np.mean(running_hf_mode_owner_pool_missing)):.2f}/"
+                    f"{float(np.mean(running_hf_mode_owner_unresolved_due_to_mode_fail)):.2f}/"
+                    f"{float(np.mean(running_hf_mode_puncture_rel_fail)):.2f}/"
+                    f"{float(np.mean(running_hf_mode_puncture_sic_fail)):.2f}/"
+                    f"{float(np.mean(running_hf_mode_puncture_owner_missing)):.2f} "
+                    f"| owner(missing/mismatch)="
+                    f"{float(np.mean(running_hf_owner_missing)):.2f}/"
+                    f"{float(np.mean(running_hf_owner_mismatch)):.2f}"
+                )
+                _report_log(
+                    f"[GREEDY][load={float(load):.1f}] pre_mode_reason_breakdown(1-{ep_idx}) "
+                    f"| raw_pair={float(np.mean(running_pre_mode_raw_pair)):.2f} "
+                    f"| mode(overlay_rel/overlay_sic/gain_ratio/owner_pool_missing/owner_unresolved_due_to_mode_fail/puncture_rel/puncture_sic/puncture_owner_missing)="
+                    f"{float(np.mean(running_pre_mode_overlay_rel)):.2f}/"
+                    f"{float(np.mean(running_pre_mode_overlay_sic)):.2f}/"
+                    f"{float(np.mean(running_pre_mode_gain_ratio)):.2f}/"
+                    f"{float(np.mean(running_pre_mode_owner_pool_missing)):.2f}/"
+                    f"{float(np.mean(running_pre_mode_owner_unresolved_due_to_mode_fail)):.2f}/"
+                    f"{float(np.mean(running_pre_mode_puncture_rel)):.2f}/"
+                    f"{float(np.mean(running_pre_mode_puncture_sic)):.2f}/"
+                    f"{float(np.mean(running_pre_mode_puncture_owner_missing)):.2f} "
+                    f"| owner(missing/mismatch)="
+                    f"{float(np.mean(running_pre_mode_owner_missing)):.2f}/"
+                    f"{float(np.mean(running_pre_mode_owner_mismatch)):.2f}"
+                )
+                _report_log(
+                    f"[GREEDY][load={float(load):.1f}] sic_pairing_prior_trace(1-{ep_idx}) "
+                    f"| sic_prior_owner_total_per_decision={float(np.mean(running_sic_prior_owner_total_per_decision)):.2f} "
+                    f"| sic_prior_pair_block_ratio={float(np.mean(running_sic_prior_pair_block_ratio)):.3f} "
+                    f"| sic_prior_saved_mode_fail_ratio={float(np.mean(running_sic_prior_saved_mode_fail_ratio)):.3f}"
+                )
+                _report_log(
+                    f"[GREEDY][load={float(load):.1f}] gate_margin_breakdown(1-{ep_idx}) "
+                    f"| target(rel/sic_db)="
+                    f"{float(np.mean(running_hf_gate_target_reliability)):.6f}/"
+                    f"{float(np.mean(running_hf_gate_target_sic_db)):.3f} "
+                    f"| fail_margin_mean(overlay_rel/overlay_sic_db/puncture_rel)="
+                    f"{float(np.mean(running_hf_gate_overlay_rel_fail_margin)):.6f}/"
+                    f"{float(np.mean(running_hf_gate_overlay_sic_fail_margin_db)):.3f}/"
+                    f"{float(np.mean(running_hf_gate_puncture_rel_fail_margin)):.6f} "
+                    f"| fail_snir_db_mean(overlay_rel/overlay_sic_post/puncture_rel)="
+                    f"{float(np.mean(running_hf_gate_overlay_rel_fail_snir_db)):.3f}/"
+                    f"{float(np.mean(running_hf_gate_overlay_sic_fail_post_sic_db)):.3f}/"
+                    f"{float(np.mean(running_hf_gate_puncture_rel_fail_snir_db)):.3f} "
+                    f"| selected_minus_admitted_rel_mean={float(np.mean(running_hf_selected_minus_admitted_reliability)):.6f}"
+                )
+                _report_log(
+                    f"[GREEDY][load={float(load):.1f}] overlay_sic_trace(1-{ep_idx}) "
+                    f"| pre_sinr_db_mean={float(np.mean(running_hf_overlay_sic_trace_pre_sinr_db)):.3f} "
+                    f"| post_sinr_db_mean={float(np.mean(running_hf_overlay_sic_trace_post_sinr_db)):.3f} "
+                    f"| noise_power_mean={float(np.mean(running_hf_overlay_sic_trace_noise_power)):.6e} "
+                    f"| intercell_interference_mean={float(np.mean(running_hf_overlay_sic_trace_intercell_interference)):.6e} "
+                    f"| local_interference_mean={float(np.mean(running_hf_overlay_sic_trace_local_interference)):.6e} "
+                    f"| residual_sic_interference_mean={float(np.mean(running_hf_overlay_sic_trace_residual_interference)):.6e} "
+                    f"| sic_residual_ratio={float(np.mean(running_hf_overlay_sic_trace_residual_ratio)):.6f} "
+                    f"| threshold_db={float(np.mean(running_hf_gate_target_sic_db)):.3f} "
+                    f"| margin_db_mean={float(np.mean(running_hf_gate_overlay_sic_fail_margin_db)):.3f} "
+                    f"| pre_sinr_bucket(raw <-10/-10~-6/-6~-2/>=-2)="
+                    f"{float(np.mean(running_hf_overlay_presinr_raw_lt_m10)):.2f}/"
+                    f"{float(np.mean(running_hf_overlay_presinr_raw_m10_m6)):.2f}/"
+                    f"{float(np.mean(running_hf_overlay_presinr_raw_m6_m2)):.2f}/"
+                    f"{float(np.mean(running_hf_overlay_presinr_raw_ge_m2)):.2f} "
+                    f"| low_pre_sinr_ratio(kept/eval)="
+                    f"{float(np.mean(running_hf_overlay_presinr_kept_low_ratio)):.3f}/"
+                    f"{float(np.mean(running_hf_overlay_presinr_eval_low_ratio)):.3f}"
+                )
+                _report_log(
+                    f"[GREEDY][load={float(load):.1f}] quality_tier_trace(1-{ep_idx}) "
+                    f"| priority_enabled={float(np.mean(running_hf_quality_priority_enabled)):.3f} "
+                    f"| raw(high/borderline/risk)="
+                    f"{float(np.mean(running_hf_quality_raw_high)):.2f}/"
+                    f"{float(np.mean(running_hf_quality_raw_borderline)):.2f}/"
+                    f"{float(np.mean(running_hf_quality_raw_risk)):.2f} "
+                    f"| kept(high/borderline/risk)="
+                    f"{float(np.mean(running_hf_quality_kept_high)):.2f}/"
+                    f"{float(np.mean(running_hf_quality_kept_borderline)):.2f}/"
+                    f"{float(np.mean(running_hf_quality_kept_risk)):.2f} "
+                    f"| eval(high/borderline/risk)="
+                    f"{float(np.mean(running_hf_quality_eval_high)):.2f}/"
+                    f"{float(np.mean(running_hf_quality_eval_borderline)):.2f}/"
+                    f"{float(np.mean(running_hf_quality_eval_risk)):.2f} "
+                    f"| selected(high/borderline/risk)="
+                    f"{float(np.mean(running_hf_quality_selected_high)):.2f}/"
+                    f"{float(np.mean(running_hf_quality_selected_borderline)):.2f}/"
+                    f"{float(np.mean(running_hf_quality_selected_risk)):.2f}"
+                )
+                _report_log(
+                    f"[GREEDY][load={float(load):.1f}] overlay_blacklist_trace(1-{ep_idx}) "
+                    f"| overlay_blacklist_cell_ratio={float(np.mean(running_hf_overlay_blacklist_cell_ratio)):.3f} "
+                    f"| overlay_blacklist_candidate_block_ratio={float(np.mean(running_hf_overlay_blacklist_candidate_block_ratio)):.3f} "
+                    f"| overlay_blacklist_saved_mode_fail_ratio={float(np.mean(running_hf_overlay_blacklist_saved_mode_fail_ratio)):.3f}"
+                )
+                _report_log(
+                    f"[GREEDY][load={float(load):.1f}] overlay_rb_reservation_trace(1-{ep_idx}) "
+                    f"| enabled={float(np.mean(running_hf_overlay_rb_reservation_enabled)):.3f} "
+                    f"| hard_block={float(np.mean(running_hf_overlay_rb_hard_block_enabled)):.3f} "
+                    f"| soft_pref={float(np.mean(running_hf_overlay_rb_soft_preference_enabled)):.3f} "
+                    f"| ratio={float(np.mean(running_hf_overlay_rb_reservation_ratio)):.3f} "
+                    f"| reserved_count={float(np.mean(running_hf_overlay_rb_reserved_count)):.2f} "
+                    f"| reserved_cell_ratio={float(np.mean(running_hf_overlay_rb_reserved_cell_ratio)):.3f} "
+                    f"| mode_block_ratio={float(np.mean(running_hf_overlay_rb_mode_block_ratio)):.3f} "
+                    f"| soft_pref_applied_ratio={float(np.mean(running_hf_overlay_rb_soft_preference_applied_ratio)):.3f}"
+                )
+                _report_log(
+                    f"[GREEDY][load={float(load):.1f}] guardrail_trace(1-{ep_idx}) "
+                    f"| enabled={float(np.mean(running_guardrail_enabled)):.3f} "
+                    f"| resample_count={float(np.mean(running_guardrail_resample_count)):.2f} "
+                    f"| pass_ratio={float(np.mean(running_guardrail_pass_ratio)):.3f} "
+                    f"| reject_reason(overlay/minrate/imbalance)="
+                    f"{float(np.mean(running_guardrail_reject_overlay)):.2f}/"
+                    f"{float(np.mean(running_guardrail_reject_embb_minrate)):.2f}/"
+                    f"{float(np.mean(running_guardrail_reject_uav_imbalance)):.2f} "
+                    f"| actual(overlay/minrate/imbalance)="
+                    f"{float(np.mean(running_guardrail_actual_overlay)):.3f}/"
+                    f"{float(np.mean(running_guardrail_actual_minrate)):.3f}/"
+                    f"{float(np.mean(running_guardrail_actual_imbalance)):.3f} "
+                    f"| threshold(overlay/minrate/imbalance)="
+                    f"{float(np.mean(running_guardrail_threshold_overlay)):.3f}/"
+                    f"{float(np.mean(running_guardrail_threshold_minrate)):.3f}/"
+                    f"{float(np.mean(running_guardrail_threshold_imbalance)):.3f}"
+                )
+        # Always emit one load-end breakdown, even when episodes_per_load < 10.
+        total_episode_sec = max(float(np.sum(running_episode_sec)), 1.0e-12)
+        total_action_select_sec = float(np.sum(running_action_select_sec))
+        total_hf_prefilter_sec = float(np.sum(running_hf_prefilter_sec))
+        total_hf_eval_sec = float(np.sum(running_hf_eval_sec))
+        total_hf_fastpath_sec = float(np.sum(running_hf_fastpath_sec))
+        total_action_other_sec = max(
+            total_action_select_sec - total_hf_prefilter_sec - total_hf_eval_sec - total_hf_fastpath_sec,
+            0.0,
+        )
+        ep_range_label = f"1-{len(episodes)}"
+        _report_log(
+            f"[GREEDY][load={float(load):.1f}] time_breakdown({ep_range_label}) "
+            f"| reset_total={float(np.sum(running_reset_total_sec)) / total_episode_sec:.3%} "
+            f"| action_select={total_action_select_sec / total_episode_sec:.3%} "
+            f"| action_resolve={float(np.sum(running_action_resolve_sec)) / total_episode_sec:.3%} "
+            f"| env_step={float(np.sum(running_env_step_sec)) / total_episode_sec:.3%} "
+            f"| residual_other={float(np.sum(running_other_sec)) / total_episode_sec:.3%} "
+            f"| baseline_cache_hit_ratio={float(np.mean(running_baseline_cache_hit_ratio)):.4f} "
+            f"| virtual_slot_reset_count_per_episode={float(np.mean(running_virtual_slot_reset_count)):.2f}"
+        )
+        _report_log(
+            f"[GREEDY][load={float(load):.1f}] time_breakdown_detail({ep_range_label}) "
+            f"| reset(state/slot_ctx/arrival/greedy_ref/build_obs/misc)="
+            f"{float(np.sum(running_reset_state_sec)) / total_episode_sec:.3%}/"
+            f"{float(np.sum(running_prepare_slot_ctx_sec)) / total_episode_sec:.3%}/"
+            f"{float(np.sum(running_arrival_gen_sec)) / total_episode_sec:.3%}/"
+            f"{float(np.sum(running_reset_greedy_ref_sec)) / total_episode_sec:.3%}/"
+            f"{float(np.sum(running_reset_build_obs_sec)) / total_episode_sec:.3%}/"
+            f"{float(np.sum(running_reset_misc_sec)) / total_episode_sec:.3%} "
+            f"| action(hf_prefilter/hf_eval/hf_fastpath/other)="
+            f"{total_hf_prefilter_sec / total_episode_sec:.3%}/"
+            f"{total_hf_eval_sec / total_episode_sec:.3%}/"
+            f"{total_hf_fastpath_sec / total_episode_sec:.3%}/"
+            f"{total_action_other_sec / total_episode_sec:.3%}"
+        )
+        _report_log(
+            f"[GREEDY][load={float(load):.1f}] env_step_breakdown({ep_range_label}) "
+            f"| step(obs_build/apply/state/reward/interference/rate)="
+            f"{float(np.sum(running_step_profile_obs_build_sec)) / total_episode_sec:.3%}/"
+            f"{float(np.sum(running_step_profile_apply_action_sec)) / total_episode_sec:.3%}/"
+            f"{float(np.sum(running_step_profile_state_update_sec)) / total_episode_sec:.3%}/"
+            f"{float(np.sum(running_step_profile_reward_compute_sec)) / total_episode_sec:.3%}/"
+            f"{float(np.sum(running_step_profile_interference_sec)) / total_episode_sec:.3%}/"
+            f"{float(np.sum(running_step_profile_rate_sec)) / total_episode_sec:.3%} "
+            f"| calls(interference/rate)="
+            f"{float(np.sum(running_step_profile_interference_calls)):.0f}/"
+            f"{float(np.sum(running_step_profile_rate_calls)):.0f}"
+            f" | cache_hits(interference)="
+            f"{float(np.sum(running_step_profile_interference_cache_hit_calls)):.0f}"
+        )
+        reward_total_sec = float(np.sum(running_step_profile_reward_compute_sec))
+        reward_delta_sec = float(np.sum(running_step_profile_reward_delta_sec))
+        reward_fullscan_sec = float(np.sum(running_step_profile_reward_fullscan_sec))
+        reward_other_sec = max(reward_total_sec - reward_delta_sec - reward_fullscan_sec, 0.0)
+        reward_denom = max(reward_total_sec, 1.0e-12)
+        _report_log(
+            f"[GREEDY][load={float(load):.1f}] reward_sub_breakdown({ep_range_label}) "
+            f"| reward(delta/fullscan/other)="
+            f"{reward_delta_sec / reward_denom:.3%}/"
+            f"{reward_fullscan_sec / reward_denom:.3%}/"
+            f"{reward_other_sec / reward_denom:.3%}"
+        )
+        obs_total_sec = float(np.sum(running_step_profile_obs_build_sec))
+        obs_select_sec = float(np.sum(running_step_profile_obs_select_sec))
+        obs_greedy_ref_sec = float(np.sum(running_step_profile_obs_greedy_ref_sec))
+        obs_local_sec = float(np.sum(running_step_profile_obs_local_sec))
+        obs_global_sec = float(np.sum(running_step_profile_obs_global_sec))
+        obs_mask_sec = float(np.sum(running_step_profile_obs_mask_sec))
+        obs_enum_other_sec = max(
+            obs_total_sec - (
+                obs_select_sec
+                + obs_greedy_ref_sec
+                + obs_local_sec
+                + obs_global_sec
+                + obs_mask_sec
+            ),
+            0.0,
+        )
+        obs_candidate_enum_sec = float(np.sum(running_step_profile_obs_candidate_enum_sec))
+        obs_agent_loop_sec = float(np.sum(running_step_profile_obs_agent_loop_sec))
+        obs_pack_sec = float(np.sum(running_step_profile_obs_pack_sec))
+        obs_flatten_concat_sec = float(np.sum(running_step_profile_obs_flatten_concat_sec))
+        obs_metadata_sec = float(np.sum(running_step_profile_obs_meta_sec))
+        obs_other_sec = max(
+            obs_enum_other_sec - (
+                obs_agent_loop_sec
+                + obs_candidate_enum_sec
+                + obs_pack_sec
+                + obs_flatten_concat_sec
+                + obs_metadata_sec
+            ),
+            0.0,
+        )
+        obs_denom = max(obs_enum_other_sec, 1.0e-12)
+        _report_log(
+            f"[GREEDY][load={float(load):.1f}] obs_enum_other_sub_breakdown({ep_range_label}) "
+            f"| obs_enum_other(obs_build-local-global-mask-select-greedy_ref)="
+            f"{obs_enum_other_sec / max(obs_total_sec, 1.0e-12):.3%} of obs_build "
+            f"| obs(agent_loop/candidate_enum/obs_pack/flatten_concat/metadata/other)="
+            f"{obs_agent_loop_sec / obs_denom:.3%}/"
+            f"{obs_candidate_enum_sec / obs_denom:.3%}/"
+            f"{obs_pack_sec / obs_denom:.3%}/"
+            f"{obs_flatten_concat_sec / obs_denom:.3%}/"
+            f"{obs_metadata_sec / obs_denom:.3%}/"
+            f"{obs_other_sec / obs_denom:.3%}"
+        )
+        _report_log(
+            f"[GREEDY][load={float(load):.1f}] ssot_invariant({ep_range_label}) "
+            f"| raw/admissible/evaluated/feasible/selected="
+            f"{float(np.mean(running_hf_raw_count)):.2f}/"
+            f"{float(np.mean(running_hf_admissible_count)):.2f}/"
+            f"{float(np.mean(running_hf_evaluated_count)):.2f}/"
+            f"{float(np.mean(running_hf_feasible_count)):.2f}/"
+            f"{float(np.mean(running_hf_selected_count)):.2f} "
+            f"| reject_by_gate(association/queue_active/mode/owner/rb_local)="
+            f"{float(np.mean(running_hf_reject_gate_assoc)):.2f}/"
+            f"{float(np.mean(running_hf_reject_gate_queue)):.2f}/"
+            f"{float(np.mean(running_hf_reject_gate_mode)):.2f}/"
+            f"{float(np.mean(running_hf_reject_gate_owner)):.2f}/"
+            f"{float(np.mean(running_hf_reject_gate_rb_local)):.2f}"
+        )
+        _report_log(
+            f"[GREEDY][load={float(load):.1f}] ssot_reason_breakdown({ep_range_label}) "
+            f"| mode(overlay_rel/overlay_sic/gain_ratio/owner_pool_missing/owner_unresolved_due_to_mode_fail/puncture_rel/puncture_sic/puncture_owner_missing)="
+            f"{float(np.mean(running_hf_mode_overlay_rel_fail)):.2f}/"
+            f"{float(np.mean(running_hf_mode_overlay_sic_fail)):.2f}/"
+            f"{float(np.mean(running_hf_mode_gain_ratio_fail)):.2f}/"
+            f"{float(np.mean(running_hf_mode_owner_pool_missing)):.2f}/"
+            f"{float(np.mean(running_hf_mode_owner_unresolved_due_to_mode_fail)):.2f}/"
+            f"{float(np.mean(running_hf_mode_puncture_rel_fail)):.2f}/"
+            f"{float(np.mean(running_hf_mode_puncture_sic_fail)):.2f}/"
+            f"{float(np.mean(running_hf_mode_puncture_owner_missing)):.2f} "
+            f"| owner(missing/mismatch)="
+            f"{float(np.mean(running_hf_owner_missing)):.2f}/"
+            f"{float(np.mean(running_hf_owner_mismatch)):.2f}"
+        )
+        _report_log(
+            f"[GREEDY][load={float(load):.1f}] pre_mode_reason_breakdown({ep_range_label}) "
+            f"| raw_pair={float(np.mean(running_pre_mode_raw_pair)):.2f} "
+            f"| mode(overlay_rel/overlay_sic/gain_ratio/owner_pool_missing/owner_unresolved_due_to_mode_fail/puncture_rel/puncture_sic/puncture_owner_missing)="
+            f"{float(np.mean(running_pre_mode_overlay_rel)):.2f}/"
+            f"{float(np.mean(running_pre_mode_overlay_sic)):.2f}/"
+            f"{float(np.mean(running_pre_mode_gain_ratio)):.2f}/"
+            f"{float(np.mean(running_pre_mode_owner_pool_missing)):.2f}/"
+            f"{float(np.mean(running_pre_mode_owner_unresolved_due_to_mode_fail)):.2f}/"
+            f"{float(np.mean(running_pre_mode_puncture_rel)):.2f}/"
+            f"{float(np.mean(running_pre_mode_puncture_sic)):.2f}/"
+            f"{float(np.mean(running_pre_mode_puncture_owner_missing)):.2f} "
+            f"| owner(missing/mismatch)="
+            f"{float(np.mean(running_pre_mode_owner_missing)):.2f}/"
+            f"{float(np.mean(running_pre_mode_owner_mismatch)):.2f}"
+        )
+        _report_log(
+            f"[GREEDY][load={float(load):.1f}] sic_pairing_prior_trace({ep_range_label}) "
+            f"| sic_prior_owner_total_per_decision={float(np.mean(running_sic_prior_owner_total_per_decision)):.2f} "
+            f"| sic_prior_pair_block_ratio={float(np.mean(running_sic_prior_pair_block_ratio)):.3f} "
+            f"| sic_prior_saved_mode_fail_ratio={float(np.mean(running_sic_prior_saved_mode_fail_ratio)):.3f}"
+        )
+        _report_log(
+            f"[GREEDY][load={float(load):.1f}] gate_margin_breakdown({ep_range_label}) "
+            f"| target(rel/sic_db)="
+            f"{float(np.mean(running_hf_gate_target_reliability)):.6f}/"
+            f"{float(np.mean(running_hf_gate_target_sic_db)):.3f} "
+            f"| fail_margin_mean(overlay_rel/overlay_sic_db/puncture_rel)="
+            f"{float(np.mean(running_hf_gate_overlay_rel_fail_margin)):.6f}/"
+            f"{float(np.mean(running_hf_gate_overlay_sic_fail_margin_db)):.3f}/"
+            f"{float(np.mean(running_hf_gate_puncture_rel_fail_margin)):.6f} "
+            f"| fail_snir_db_mean(overlay_rel/overlay_sic_post/puncture_rel)="
+            f"{float(np.mean(running_hf_gate_overlay_rel_fail_snir_db)):.3f}/"
+            f"{float(np.mean(running_hf_gate_overlay_sic_fail_post_sic_db)):.3f}/"
+            f"{float(np.mean(running_hf_gate_puncture_rel_fail_snir_db)):.3f} "
+            f"| selected_minus_admitted_rel_mean={float(np.mean(running_hf_selected_minus_admitted_reliability)):.6f}"
+        )
+        _report_log(
+            f"[GREEDY][load={float(load):.1f}] overlay_sic_trace({ep_range_label}) "
+            f"| pre_sinr_db_mean={float(np.mean(running_hf_overlay_sic_trace_pre_sinr_db)):.3f} "
+            f"| post_sinr_db_mean={float(np.mean(running_hf_overlay_sic_trace_post_sinr_db)):.3f} "
+            f"| noise_power_mean={float(np.mean(running_hf_overlay_sic_trace_noise_power)):.6e} "
+            f"| intercell_interference_mean={float(np.mean(running_hf_overlay_sic_trace_intercell_interference)):.6e} "
+            f"| local_interference_mean={float(np.mean(running_hf_overlay_sic_trace_local_interference)):.6e} "
+            f"| residual_sic_interference_mean={float(np.mean(running_hf_overlay_sic_trace_residual_interference)):.6e} "
+            f"| sic_residual_ratio={float(np.mean(running_hf_overlay_sic_trace_residual_ratio)):.6f} "
+            f"| threshold_db={float(np.mean(running_hf_gate_target_sic_db)):.3f} "
+            f"| margin_db_mean={float(np.mean(running_hf_gate_overlay_sic_fail_margin_db)):.3f} "
+            f"| pre_sinr_bucket(raw <-10/-10~-6/-6~-2/>=-2)="
+            f"{float(np.mean(running_hf_overlay_presinr_raw_lt_m10)):.2f}/"
+            f"{float(np.mean(running_hf_overlay_presinr_raw_m10_m6)):.2f}/"
+            f"{float(np.mean(running_hf_overlay_presinr_raw_m6_m2)):.2f}/"
+            f"{float(np.mean(running_hf_overlay_presinr_raw_ge_m2)):.2f} "
+            f"| low_pre_sinr_ratio(kept/eval)="
+            f"{float(np.mean(running_hf_overlay_presinr_kept_low_ratio)):.3f}/"
+            f"{float(np.mean(running_hf_overlay_presinr_eval_low_ratio)):.3f}"
+        )
+        _report_log(
+            f"[GREEDY][load={float(load):.1f}] quality_tier_trace({ep_range_label}) "
+            f"| priority_enabled={float(np.mean(running_hf_quality_priority_enabled)):.3f} "
+            f"| raw(high/borderline/risk)="
+            f"{float(np.mean(running_hf_quality_raw_high)):.2f}/"
+            f"{float(np.mean(running_hf_quality_raw_borderline)):.2f}/"
+            f"{float(np.mean(running_hf_quality_raw_risk)):.2f} "
+            f"| kept(high/borderline/risk)="
+            f"{float(np.mean(running_hf_quality_kept_high)):.2f}/"
+            f"{float(np.mean(running_hf_quality_kept_borderline)):.2f}/"
+            f"{float(np.mean(running_hf_quality_kept_risk)):.2f} "
+            f"| eval(high/borderline/risk)="
+            f"{float(np.mean(running_hf_quality_eval_high)):.2f}/"
+            f"{float(np.mean(running_hf_quality_eval_borderline)):.2f}/"
+            f"{float(np.mean(running_hf_quality_eval_risk)):.2f} "
+            f"| selected(high/borderline/risk)="
+            f"{float(np.mean(running_hf_quality_selected_high)):.2f}/"
+            f"{float(np.mean(running_hf_quality_selected_borderline)):.2f}/"
+            f"{float(np.mean(running_hf_quality_selected_risk)):.2f}"
+        )
+        _report_log(
+            f"[GREEDY][load={float(load):.1f}] overlay_blacklist_trace({ep_range_label}) "
+            f"| overlay_blacklist_cell_ratio={float(np.mean(running_hf_overlay_blacklist_cell_ratio)):.3f} "
+            f"| overlay_blacklist_candidate_block_ratio={float(np.mean(running_hf_overlay_blacklist_candidate_block_ratio)):.3f} "
+            f"| overlay_blacklist_saved_mode_fail_ratio={float(np.mean(running_hf_overlay_blacklist_saved_mode_fail_ratio)):.3f}"
+        )
+        _report_log(
+            f"[GREEDY][load={float(load):.1f}] overlay_rb_reservation_trace({ep_range_label}) "
+            f"| enabled={float(np.mean(running_hf_overlay_rb_reservation_enabled)):.3f} "
+            f"| hard_block={float(np.mean(running_hf_overlay_rb_hard_block_enabled)):.3f} "
+            f"| soft_pref={float(np.mean(running_hf_overlay_rb_soft_preference_enabled)):.3f} "
+            f"| ratio={float(np.mean(running_hf_overlay_rb_reservation_ratio)):.3f} "
+            f"| reserved_count={float(np.mean(running_hf_overlay_rb_reserved_count)):.2f} "
+            f"| reserved_cell_ratio={float(np.mean(running_hf_overlay_rb_reserved_cell_ratio)):.3f} "
+            f"| mode_block_ratio={float(np.mean(running_hf_overlay_rb_mode_block_ratio)):.3f} "
+            f"| soft_pref_applied_ratio={float(np.mean(running_hf_overlay_rb_soft_preference_applied_ratio)):.3f}"
+        )
+        _report_log(
+            f"[GREEDY][load={float(load):.1f}] guardrail_trace({ep_range_label}) "
+            f"| enabled={float(np.mean(running_guardrail_enabled)):.3f} "
+            f"| resample_count={float(np.mean(running_guardrail_resample_count)):.2f} "
+            f"| pass_ratio={float(np.mean(running_guardrail_pass_ratio)):.3f} "
+            f"| reject_reason(overlay/minrate/imbalance)="
+            f"{float(np.mean(running_guardrail_reject_overlay)):.2f}/"
+            f"{float(np.mean(running_guardrail_reject_embb_minrate)):.2f}/"
+            f"{float(np.mean(running_guardrail_reject_uav_imbalance)):.2f} "
+            f"| actual(overlay/minrate/imbalance)="
+            f"{float(np.mean(running_guardrail_actual_overlay)):.3f}/"
+            f"{float(np.mean(running_guardrail_actual_minrate)):.3f}/"
+            f"{float(np.mean(running_guardrail_actual_imbalance)):.3f} "
+            f"| threshold(overlay/minrate/imbalance)="
+            f"{float(np.mean(running_guardrail_threshold_overlay)):.3f}/"
+            f"{float(np.mean(running_guardrail_threshold_minrate)):.3f}/"
+            f"{float(np.mean(running_guardrail_threshold_imbalance)):.3f}"
+        )
+        _guardrail_total = int(len(running_guardrail_pass_ratio))
+        _guardrail_pass = int(np.count_nonzero(np.asarray(running_guardrail_pass_ratio, dtype=float) > 0.5))
+        _guardrail_reject = int(max(_guardrail_total - _guardrail_pass, 0))
+        _guardrail_reject_overlay = int(np.count_nonzero(np.asarray(running_guardrail_reject_overlay, dtype=float) > 0.5))
+        _guardrail_reject_minrate = int(np.count_nonzero(np.asarray(running_guardrail_reject_embb_minrate, dtype=float) > 0.5))
+        _guardrail_reject_imbalance = int(np.count_nonzero(np.asarray(running_guardrail_reject_uav_imbalance, dtype=float) > 0.5))
+        _report_log(
+            f"[GREEDY][load={float(load):.1f}] feasible_regime_audit({ep_range_label}) "
+            f"| episodes={_guardrail_total} "
+            f"| pass/reject={_guardrail_pass}/{_guardrail_reject} "
+            f"| reject_reason_count(overlay/minrate/imbalance)="
+            f"{_guardrail_reject_overlay}/{_guardrail_reject_minrate}/{_guardrail_reject_imbalance}"
+        )
+        def _same_ratio_str(vals: List[str]) -> float:
+            if not vals:
+                return 1.0
+            ref = vals[0]
+            return float(np.mean([1.0 if str(v) == str(ref) else 0.0 for v in vals]))
+        _same_channel_ratio = _same_ratio_str(running_same_channel_hash)
+        _same_assoc_ratio = _same_ratio_str(running_same_assoc_hash)
+        _same_user_pool_ratio = _same_ratio_str(running_same_user_pool_hash)
+        _mother_id_ref = running_mother_topology_id[0] if running_mother_topology_id else ""
+        _mother_seed_ref = float(running_mother_topology_seed[0]) if running_mother_topology_seed else 0.0
+        _channel_hash_ref = running_same_channel_hash[0] if running_same_channel_hash else ""
+        _assoc_hash_ref = running_same_assoc_hash[0] if running_same_assoc_hash else ""
+        _user_pool_hash_ref = running_same_user_pool_hash[0] if running_same_user_pool_hash else ""
+        _subset_hash_ref = running_mix_user_subset_hash[0] if running_mix_user_subset_hash else ""
+        _embb_subset_hash_ref = running_embb_subset_hash[0] if running_embb_subset_hash else ""
+        _same_feasible_graph_hash_ref = running_same_feasible_graph_hash[0] if running_same_feasible_graph_hash else ""
+        _feasible_graph_id_ref = running_feasible_graph_id[0] if running_feasible_graph_id else ""
+        _overlay_graph_hash_ref = running_overlay_graph_hash[0] if running_overlay_graph_hash else ""
+        _channel_matrix_hash_ref = running_channel_matrix_hash[0] if running_channel_matrix_hash else ""
+        _pathloss_hash_ref = running_pathloss_hash[0] if running_pathloss_hash else ""
+        _shadowing_hash_ref = running_shadowing_hash[0] if running_shadowing_hash else ""
+        _sic_order_hash_ref = running_sic_order_hash[0] if running_sic_order_hash else ""
+        _repair_sequence_hash_ref = running_repair_sequence_hash[0] if running_repair_sequence_hash else ""
+        _guardrail_pass_mean = float(np.mean(running_guardrail_pass_flag)) if running_guardrail_pass_flag else 0.0
+        _report_log(
+            f"[GREEDY][load={float(load):.1f}] mix_comparability_audit({ep_range_label}) "
+            f"| mother_topology_id={_mother_id_ref} "
+            f"| mother_topology_seed={_mother_seed_ref:.0f} "
+            f"| same_channel_hash={_channel_hash_ref} "
+            f"| same_assoc_hash={_assoc_hash_ref} "
+            f"| same_user_pool_hash={_user_pool_hash_ref} "
+            f"| mix_user_subset_hash={_subset_hash_ref} "
+            f"| embb_subset_hash={_embb_subset_hash_ref} "
+            f"| feasible_graph_id={_feasible_graph_id_ref} "
+            f"| same_feasible_graph_hash={_same_feasible_graph_hash_ref} "
+            f"| overlay_graph_hash={_overlay_graph_hash_ref} "
+            f"| channel_matrix_hash={_channel_matrix_hash_ref} "
+            f"| pathloss_hash={_pathloss_hash_ref} "
+            f"| shadowing_hash={_shadowing_hash_ref} "
+            f"| sic_order_hash={_sic_order_hash_ref} "
+            f"| repair_sequence_hash={_repair_sequence_hash_ref} "
+            f"| consistency_ratio(channel/assoc/user_pool)="
+            f"{_same_channel_ratio:.3f}/{_same_assoc_ratio:.3f}/{_same_user_pool_ratio:.3f} "
+            f"| guardrail_pass={_guardrail_pass_mean:.3f}"
+        )
+        if len(episodes) < 10:
+            mean_urllc_users = float(np.mean(running_urllc_users)) if running_urllc_users else 0.0
+            mean_embb_users = float(np.mean(running_embb_users)) if running_embb_users else 0.0
+            embb_to_urllc_ratio = float(mean_embb_users / max(mean_urllc_users, 1.0e-9))
+            _report_log(
+                f"[GREEDY][load={float(load):.1f}] episodes {ep_range_label} summary "
+                f"| users_mean(urllc/embb)={mean_urllc_users:.2f}/{mean_embb_users:.2f} "
+                f"| embb:urllc={embb_to_urllc_ratio:.3f} "
+                f"| arrivals_mean={float(np.mean(running_arrivals)):.2f} "
+                f"| admitted_mean={float(np.mean(running_admitted)):.2f} "
+                f"| admission_mean={float(np.mean(running_admission_ratio)):.4f} "
+                f"| embb_rate_mean={float(np.mean(running_embb_rate_mbps)):.3f} Mbps "
+                f"| urllc_tp_mean={float(np.mean(running_urllc_tp_mbps)):.3f} Mbps "
+                f"| budget_used_ratio_mean={float(np.mean(running_budget_used_ratio)):.4f} "
+                f"| budget_used_ratio_max={float(np.max(running_budget_used_ratio)):.4f} "
+                f"| hf_rescan_ratio={float(np.mean(running_hf_rescan_used)):.4f} "
+                f"| baseline_cache_hit_ratio={float(np.mean(running_baseline_cache_hit_ratio)):.4f} "
+                f"| virtual_slot_reset_count_per_episode={float(np.mean(running_virtual_slot_reset_count)):.2f}"
+            )
         # Persist per-episode samples for post-hoc plotting/comparison.
         metrics['greedy_episode_arrivals_samples'].append([float(x) for x in running_arrivals])
         metrics['greedy_episode_admitted_samples'].append([float(x) for x in running_admitted])
@@ -3590,9 +6389,26 @@ def run_hard_feasible_throughput_greedy_sweep(
                     ])
                 )
             else:
-                metrics[key].append(_safe_mean([episode.get(key, 0.0) for episode in episodes]))
+                metrics[key].append(_episode_scalar_aggregate(episodes, key, default=0.0))
         for key in vector_keys:
             metrics[key].append(np.mean(np.stack([episode[key] for episode in episodes]), axis=0))
+        # Mix comparability fields (string/numeric metadata).
+        metrics['mother_topology_id'].append(_mother_id_ref)
+        metrics['mother_topology_seed'].append(_mother_seed_ref)
+        metrics['same_channel_hash'].append(_channel_hash_ref)
+        metrics['same_assoc_hash'].append(_assoc_hash_ref)
+        metrics['same_user_pool_hash'].append(_user_pool_hash_ref)
+        metrics['mix_user_subset_hash'].append(_subset_hash_ref)
+        metrics['embb_subset_hash'].append(_embb_subset_hash_ref)
+        metrics['same_feasible_graph_hash'].append(_same_feasible_graph_hash_ref)
+        metrics['feasible_graph_id'].append(_feasible_graph_id_ref)
+        metrics['overlay_graph_hash'].append(_overlay_graph_hash_ref)
+        metrics['channel_matrix_hash'].append(_channel_matrix_hash_ref)
+        metrics['pathloss_hash'].append(_pathloss_hash_ref)
+        metrics['shadowing_hash'].append(_shadowing_hash_ref)
+        metrics['sic_order_hash'].append(_sic_order_hash_ref)
+        metrics['repair_sequence_hash'].append(_repair_sequence_hash_ref)
+        metrics['guardrail_pass'].append(_guardrail_pass_mean)
     _report_timing_log(
         f"run_hard_feasible_throughput_greedy_sweep loads={len(loads)} episodes_per_load={episodes_per_load} sec={perf_counter() - sweep_start:.3f}"
     )
@@ -3618,6 +6434,11 @@ def run_selected_greedy_sweep(
         metrics, representative = run_throughput_feasible_oracle_sweep(loads, episodes_per_load)
         return metrics, representative, None
     if mode == "hard_feasible_throughput_greedy":
+        metrics, representative = run_hard_feasible_throughput_greedy_sweep(
+            loads, episodes_per_load, checkpoint_path, cfg
+        )
+        return metrics, representative, None
+    if mode == "global_frontier_greedy":
         metrics, representative = run_hard_feasible_throughput_greedy_sweep(
             loads, episodes_per_load, checkpoint_path, cfg
         )
@@ -3709,6 +6530,19 @@ def run_report_greedy_bundle(
         metrics_bundle['hard_feasible_throughput_greedy'] = hard_metrics
         representative_bundle['hard_feasible_throughput_greedy'] = hard_rep
 
+    if selected_mode == "global_frontier_greedy" or frozen_mode == "global_frontier_greedy":
+        metrics_bundle['global_frontier_greedy'] = selected_metrics
+        representative_bundle['global_frontier_greedy'] = selected_rep
+    else:
+        global_cfg = deepcopy(cfg)
+        global_cfg.training.greedy_baseline_mode = "global_frontier_greedy"
+        global_cfg.training.selection_baseline_mode = "global_frontier_greedy"
+        global_metrics, global_rep = run_hard_feasible_throughput_greedy_sweep(
+            loads, episodes_per_load, checkpoint_path, global_cfg
+        )
+        metrics_bundle['global_frontier_greedy'] = global_metrics
+        representative_bundle['global_frontier_greedy'] = global_rep
+
     if selected_mode == "myopic_throughput_greedy" or frozen_mode == "myopic_throughput_greedy":
         metrics_bundle['myopic_throughput_greedy'] = selected_metrics
         representative_bundle['myopic_throughput_greedy'] = selected_rep
@@ -3726,6 +6560,22 @@ def run_report_greedy_bundle(
         throughput_only_metrics, throughput_only_rep = run_throughput_only_greedy_sweep(loads, episodes_per_load, checkpoint_path, cfg)
         metrics_bundle['throughput_only_greedy'] = throughput_only_metrics
         representative_bundle['throughput_only_greedy'] = throughput_only_rep
+
+    if selected_mode == "rate_loss_min_greedy" or frozen_mode == "rate_loss_min_greedy":
+        metrics_bundle['rate_loss_min_greedy'] = selected_metrics
+        representative_bundle['rate_loss_min_greedy'] = selected_rep
+    else:
+        rate_loss_metrics, rate_loss_rep = run_rate_loss_min_greedy_sweep(loads, episodes_per_load, checkpoint_path, cfg)
+        metrics_bundle['rate_loss_min_greedy'] = rate_loss_metrics
+        representative_bundle['rate_loss_min_greedy'] = rate_loss_rep
+
+    if selected_mode == "force_admit_minloss_greedy" or frozen_mode == "force_admit_minloss_greedy":
+        metrics_bundle['force_admit_minloss_greedy'] = selected_metrics
+        representative_bundle['force_admit_minloss_greedy'] = selected_rep
+    else:
+        force_admit_metrics, force_admit_rep = run_force_admit_minloss_greedy_sweep(loads, episodes_per_load, checkpoint_path, cfg)
+        metrics_bundle['force_admit_minloss_greedy'] = force_admit_metrics
+        representative_bundle['force_admit_minloss_greedy'] = force_admit_rep
 
     if selected_mode == "channel_only_greedy" or frozen_mode == "channel_only_greedy":
         metrics_bundle['channel_only_greedy'] = selected_metrics
@@ -3772,9 +6622,12 @@ def _baseline_style(mode: str | None) -> tuple[str, str]:
         'original_greedy_normal_v2': ('tab:pink', 'X'),
         'myopic_throughput_greedy': ('tab:brown', 'h'),
         'hard_feasible_throughput_greedy': ('saddlebrown', 'H'),
+        'global_frontier_greedy': ('darkorange', 's'),
         'matched_fixed_embb': ('tab:green', '^'),
         'throughput_feasible_oracle': ('tab:red', '*'),
         'throughput_only_greedy': ('tab:purple', 'D'),
+        'rate_loss_min_greedy': ('tab:olive', '>'),
+        'force_admit_minloss_greedy': ('tab:red', 'P'),
         'channel_only_greedy': ('tab:gray', 'v'),
     }
     return style_map.get(_normalize_baseline_mode(mode), ('tab:purple', 'D'))
@@ -3831,6 +6684,8 @@ def _comparison_source(
         return greedy_throughput_feasible
     if series_key == 'throughput_only_greedy':
         return greedy_throughput_only
+    if series_key == 'rate_loss_min_greedy':
+        return greedy_throughput_only
     return greedy_channel_only
 
 
@@ -3879,6 +6734,7 @@ def run_dense_method_bundle(
     base_sys, base_urllc, base_embb, base_algo, base_sim = _build_main_like_configs()
     checkpoint_cfg = deepcopy(_load_checkpoint_cfg(checkpoint_path))
     checkpoint_cfg.env.include_greedy_reference_in_obs = False
+    _apply_forced_urllc_ratio_to_sim(base_sim, cfg, log_prefix="DENSE")
     method_bundle: Dict[str, Dict] = {}
     model = None
     model_cfg = None
@@ -4025,6 +6881,7 @@ def run_timeslot_series(
         frozen_greedy_payload=frozen_greedy_payload,
     )
     base_sys, base_urllc, base_embb, base_algo, base_sim = _build_main_like_configs()
+    _apply_forced_urllc_ratio_to_sim(base_sim, deepcopy(cfg or _load_checkpoint_cfg(checkpoint_path)), log_prefix="TIMESLOT")
     sys_cfg, urllc_cfg, embb_cfg, algo_cfg, sim_cfg = _configure_density_scenario(
         load, base_sys, base_urllc, base_embb, base_algo, base_sim
     )
@@ -4087,6 +6944,14 @@ def run_greedy_timeslot_series(
         greedy_cfg.env.include_greedy_reference_in_obs = False
         greedy_env = SRMAPPOPhaseAEnv(sys_cfg, urllc_cfg, embb_cfg, algo_cfg, sim_cfg, greedy_cfg)
     elif greedy_mode == "throughput_only_greedy":
+        greedy_cfg = deepcopy(report_cfg)
+        greedy_cfg.env.include_greedy_reference_in_obs = False
+        greedy_env = SRMAPPOPhaseAEnv(sys_cfg, urllc_cfg, embb_cfg, algo_cfg, sim_cfg, greedy_cfg)
+    elif greedy_mode == "rate_loss_min_greedy":
+        greedy_cfg = deepcopy(report_cfg)
+        greedy_cfg.env.include_greedy_reference_in_obs = False
+        greedy_env = SRMAPPOPhaseAEnv(sys_cfg, urllc_cfg, embb_cfg, algo_cfg, sim_cfg, greedy_cfg)
+    elif greedy_mode == "force_admit_minloss_greedy":
         greedy_cfg = deepcopy(report_cfg)
         greedy_cfg.env.include_greedy_reference_in_obs = False
         greedy_env = SRMAPPOPhaseAEnv(sys_cfg, urllc_cfg, embb_cfg, algo_cfg, sim_cfg, greedy_cfg)
@@ -4194,6 +7059,28 @@ def run_greedy_timeslot_series(
                 collect_trace=False,
                 use_greedy=True,
                 greedy_policy="throughput_only",
+                cache_tag=str(Path(checkpoint_path).resolve()),
+            )
+        elif greedy_mode == "rate_loss_min_greedy":
+            greedy_summary = run_env_episode(
+                greedy_env,
+                model=None,
+                cfg=report_cfg,
+                seed=seed,
+                collect_trace=False,
+                use_greedy=True,
+                greedy_policy="rate_loss_min",
+                cache_tag=str(Path(checkpoint_path).resolve()),
+            )
+        elif greedy_mode == "force_admit_minloss_greedy":
+            greedy_summary = run_env_episode(
+                greedy_env,
+                model=None,
+                cfg=report_cfg,
+                seed=seed,
+                collect_trace=False,
+                use_greedy=True,
+                greedy_policy="force_admit_minloss",
                 cache_tag=str(Path(checkpoint_path).resolve()),
             )
         elif greedy_mode == "channel_only_greedy":
@@ -4316,6 +7203,21 @@ def plot_core_kpi_debug_fast(
             slot_dur = np.full_like(loads, 1.0e-3, dtype=float)
         return scheduled * packet_bits / np.maximum(slot_dur, 1.0e-12)
 
+    def _actual_arrivals(data: Dict) -> np.ndarray:
+        arrivals = _series(data, 'active_packets')
+        if np.any(arrivals > 0.0):
+            return arrivals
+        scheduled = _series(data, 'scheduled_packets')
+        admission = _series(data, 'urllc_admission')
+        if not np.any(scheduled > 0.0) or not np.any(admission > 0.0):
+            return arrivals
+        return np.divide(
+            scheduled,
+            np.maximum(admission, 1.0e-12),
+            out=np.zeros_like(loads, dtype=float),
+            where=np.maximum(admission, 1.0e-12) > 0.0,
+        )
+
     def _plot2(ax, key: str, title: str, ylabel: str, *, scale_div: float = 1.0, scale_mul: float = 1.0):
         y_rl = _series(rl, key) / scale_div * scale_mul
         y_base = _series(baseline, key) / scale_div * scale_mul
@@ -4333,8 +7235,22 @@ def plot_core_kpi_debug_fast(
     if not greedy_only:
         ax.plot(loads, m_adm, color='tab:orange', marker='s', markersize=6, linewidth=2.0, label='MAPPO admission (solid)')
     ax.plot(loads, g_adm, color='tab:brown', marker='o', markersize=6, linewidth=2.0, linestyle='--', label=f'{baseline_label} admission (dashed)')
+    # Ratio companion totals (arrivals / admitted).
+    ax2 = ax.twinx()
+    m_arrivals = _actual_arrivals(rl)
+    m_admitted = _series(rl, 'scheduled_packets')
+    g_arrivals = _actual_arrivals(baseline)
+    g_admitted = _series(baseline, 'scheduled_packets')
+    if not greedy_only:
+        ax2.plot(loads, m_arrivals, color='tab:blue', marker='^', markersize=4, linewidth=1.6, alpha=0.55, label='MAPPO arrivals (count)')
+        ax2.plot(loads, m_admitted, color='tab:green', marker='v', markersize=4, linewidth=1.6, alpha=0.55, label='MAPPO admitted (count)')
+    ax2.plot(loads, g_arrivals, color='tab:purple', marker='^', markersize=4, linewidth=1.3, alpha=0.45, linestyle='--', label=f'{baseline_label} arrivals (count)')
+    ax2.plot(loads, g_admitted, color='tab:olive', marker='v', markersize=4, linewidth=1.3, alpha=0.45, linestyle='--', label=f'{baseline_label} admitted (count)')
     _style(ax, 'URLLC admission ratio', 'Average UE load per UAV', 'Ratio')
-    ax.legend(loc="best", fontsize=8, frameon=False)
+    ax2.set_ylabel('Packets')
+    h1, l1 = ax.get_legend_handles_labels()
+    h2, l2 = ax2.get_legend_handles_labels()
+    ax.legend(h1 + h2, l1 + l2, loc="best", fontsize=8, frameon=False)
 
     # Service ratio panel: service ratio + min-rate satisfaction ratio (both methods).
     ax = axes[0, 2]
@@ -4372,8 +7288,40 @@ def plot_core_kpi_debug_fast(
     if not greedy_only:
         ax.plot(loads, m_min, color='tab:green', marker='^', markersize=6, linewidth=2.0, alpha=0.90, zorder=3, label='MAPPO min-rate satisfaction (solid)')
     ax.plot(loads, g_min, color='tab:gray', marker='d', markersize=6, linewidth=2.0, linestyle='--', alpha=0.85, zorder=2, label=f'{baseline_label} min-rate satisfaction (dashed)')
+    # Ratio companion totals (served users / min-rate-satisfied users).
+    ax2 = ax.twinx()
+    m_embb_n = _series(rl, 'embb_user_count')
+    g_embb_n = _series(baseline, 'embb_user_count')
+    m_served_n = m_srv * np.maximum(m_embb_n, 0.0)
+    g_served_n = g_srv * np.maximum(g_embb_n, 0.0)
+    m_min_ok_n = _series_with_fallback(
+        rl,
+        loads,
+        'embb_min_rate_satisfied_user_count_after_puncture_deduction',
+        ('embb_min_rate_satisfied_user_count',),
+        context='core_kpi_debug.mappo.minrate_count',
+    )
+    g_min_ok_n = _series_with_fallback(
+        baseline,
+        loads,
+        'embb_min_rate_satisfied_user_count_after_puncture_deduction',
+        ('embb_min_rate_satisfied_user_count',),
+        context='core_kpi_debug.greedy.minrate_count',
+    )
+    if m_min_ok_n.size != loads.size or not np.any(np.isfinite(m_min_ok_n)):
+        m_min_ok_n = m_min * np.maximum(m_embb_n, 0.0)
+    if g_min_ok_n.size != loads.size or not np.any(np.isfinite(g_min_ok_n)):
+        g_min_ok_n = g_min * np.maximum(g_embb_n, 0.0)
+    if not greedy_only:
+        ax2.plot(loads, m_served_n, color='tab:cyan', marker='P', markersize=4, linewidth=1.5, alpha=0.55, label='MAPPO served eMBB (count)')
+        ax2.plot(loads, m_min_ok_n, color='tab:blue', marker='X', markersize=4, linewidth=1.5, alpha=0.55, label='MAPPO min-rate OK (count)')
+    ax2.plot(loads, g_served_n, color='tab:pink', marker='P', markersize=4, linewidth=1.3, alpha=0.45, linestyle='--', label=f'{baseline_label} served eMBB (count)')
+    ax2.plot(loads, g_min_ok_n, color='tab:purple', marker='X', markersize=4, linewidth=1.3, alpha=0.45, linestyle='--', label=f'{baseline_label} min-rate OK (count)')
     _style(ax, 'eMBB service & min-rate satisfaction (corrected)', 'Average UE load per UAV', 'Ratio')
-    ax.legend(loc="best", fontsize=8, frameon=False)
+    ax2.set_ylabel('Users')
+    h1, l1 = ax.get_legend_handles_labels()
+    h2, l2 = ax2.get_legend_handles_labels()
+    ax.legend(h1 + h2, l1 + l2, loc="best", fontsize=8, frameon=False)
     _report_plot_key_audit(
         "core_kpi_debug.service_minrate_corrected",
         [
@@ -4401,14 +7349,14 @@ def plot_core_kpi_debug_fast(
     h2, l2 = ax2.get_legend_handles_labels()
     ax.legend(h1 + h2, l1 + l2, loc="best", fontsize=8, frameon=False)
 
-    # Mode ratio (overlay/superpose + puncture).
+    # Coexistence-only mode mix: KEEP is excluded from the denominator.
     ax = axes[1, 1]
     if not greedy_only:
         ax.plot(loads, _series(rl, 'overlay_ratio'), color='tab:orange', marker='s', markersize=6, linewidth=2.0, label='MAPPO superpose/overlay (solid)')
         ax.plot(loads, _series(rl, 'puncture_ratio'), color='tab:red', marker='x', markersize=6, linewidth=2.0, label='MAPPO puncture (solid)')
     ax.plot(loads, _series(baseline, 'overlay_ratio'), color='tab:brown', marker='o', markersize=6, linewidth=2.0, linestyle='--', label=f'{baseline_label} superpose/overlay (dashed)')
     ax.plot(loads, _series(baseline, 'puncture_ratio'), color='tab:gray', marker='d', markersize=6, linewidth=2.0, linestyle='--', label=f'{baseline_label} puncture (dashed)')
-    _style(ax, 'Mode ratio', 'Average UE load per UAV', 'Ratio')
+    _style(ax, 'Coexistence mode mix (excluding KEEP)', 'Average UE load per UAV', 'Ratio')
     ax.legend(loc="best", fontsize=8, frameon=False)
 
     # URLLC throughput (Mbps estimate).
@@ -4435,6 +7383,8 @@ def plot_core_kpi_debug_fast(
 
     if legend_title:
         fig.suptitle(str(legend_title), fontsize=10)
+    for ax in axes.ravel():
+        ax.set_xticks(loads)
     path = RESULTS_DIR / 'core_kpi_debug.png'
     fig.savefig(path, dpi=220)
     plt.close(fig)
@@ -4480,6 +7430,149 @@ def plot_urllc_arrival_admit_debug(
     if title_suffix:
         fig.suptitle(str(title_suffix), fontsize=10)
     path = RESULTS_DIR / "urllc_arrival_admit_debug.png"
+    fig.savefig(path, dpi=220)
+    plt.close(fig)
+    return path
+
+
+def _report_compare_total_user_axis(rl: Dict, baseline: Dict) -> tuple[np.ndarray, str]:
+    loads = np.asarray(rl.get('loads', baseline.get('loads', [])), dtype=float)
+    rl_total = np.asarray(rl.get('embb_user_count', []), dtype=float) + np.asarray(rl.get('urllc_user_count', []), dtype=float)
+    baseline_total = np.asarray(baseline.get('embb_user_count', []), dtype=float) + np.asarray(baseline.get('urllc_user_count', []), dtype=float)
+    if rl_total.size == loads.size and np.all(np.isfinite(rl_total)) and np.all(rl_total > 0.0):
+        return rl_total, 'Total users in system'
+    if baseline_total.size == loads.size and np.all(np.isfinite(baseline_total)) and np.all(baseline_total > 0.0):
+        return baseline_total, 'Total users in system'
+    return loads, 'Average UE load per UAV'
+
+
+def plot_min_rate_satisfied_count_compare(
+    rl: Dict,
+    baseline: Dict,
+    *,
+    baseline_label: str = "Greedy",
+) -> Path:
+    x, xlabel = _report_compare_total_user_axis(rl, baseline)
+    rl_count = np.asarray(rl.get('embb_min_rate_satisfied_user_count', []), dtype=float)
+    baseline_count = np.asarray(baseline.get('embb_min_rate_satisfied_user_count', []), dtype=float)
+    if rl_count.size != x.size:
+        rl_ratio = np.asarray(rl.get('embb_min_rate_satisfaction_ratio', []), dtype=float)
+        rl_users = np.asarray(rl.get('embb_user_count', []), dtype=float)
+        rl_count = rl_ratio * rl_users if rl_ratio.size == x.size and rl_users.size == x.size else np.zeros_like(x)
+    if baseline_count.size != x.size:
+        baseline_ratio = np.asarray(baseline.get('embb_min_rate_satisfaction_ratio', []), dtype=float)
+        baseline_users = np.asarray(baseline.get('embb_user_count', []), dtype=float)
+        baseline_count = baseline_ratio * baseline_users if baseline_ratio.size == x.size and baseline_users.size == x.size else np.zeros_like(x)
+
+    fig, ax = plt.subplots(figsize=(9.2, 5.4), constrained_layout=True)
+    ax.plot(x, rl_count, color='tab:orange', marker='s', markersize=6, linewidth=2.1, label='MAPPO')
+    ax.plot(x, baseline_count, color='tab:brown', marker='o', markersize=6, linewidth=2.1, linestyle='--', label=baseline_label)
+    ax.set_title('Min-rate satisfied eMBB user count')
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel('Users')
+    ax.grid(True, alpha=0.25)
+    ax.legend(loc='best', fontsize=9, frameon=False)
+    path = RESULTS_DIR / 'custom_min_rate_satisfied_count_compare.png'
+    fig.savefig(path, dpi=220)
+    plt.close(fig)
+    return path
+
+
+def plot_admitted_urllc_packets_compare(
+    rl: Dict,
+    baseline: Dict,
+    *,
+    baseline_label: str = "Greedy",
+) -> Path:
+    x, xlabel = _report_compare_total_user_axis(rl, baseline)
+    rl_packets = np.asarray(rl.get('scheduled_packets', []), dtype=float)
+    baseline_packets = np.asarray(baseline.get('scheduled_packets', []), dtype=float)
+
+    fig, ax = plt.subplots(figsize=(9.2, 5.4), constrained_layout=True)
+    ax.plot(x, rl_packets, color='tab:orange', marker='s', markersize=6, linewidth=2.1, label='MAPPO')
+    ax.plot(x, baseline_packets, color='tab:brown', marker='o', markersize=6, linewidth=2.1, linestyle='--', label=baseline_label)
+    ax.set_title('Admitted URLLC packet count')
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel('Packets')
+    ax.grid(True, alpha=0.25)
+    ax.legend(loc='best', fontsize=9, frameon=False)
+    path = RESULTS_DIR / 'custom_admitted_urllc_packets_compare.png'
+    fig.savefig(path, dpi=220)
+    plt.close(fig)
+    return path
+
+
+def plot_mode_action_share_compare(
+    rl: Dict,
+    baseline: Dict,
+    *,
+    baseline_label: str = "Greedy",
+) -> Path:
+    x, xlabel = _report_compare_total_user_axis(rl, baseline)
+
+    def _series(data: Dict, key: str) -> np.ndarray:
+        arr = np.asarray(data.get(key, []), dtype=float)
+        return arr if arr.size == x.size else np.zeros_like(x, dtype=float)
+
+    m_overlay = _series(rl, 'overlay_selection_ratio')
+    m_puncture = _series(rl, 'puncture_selection_ratio')
+    g_overlay = _series(baseline, 'overlay_selection_ratio')
+    g_puncture = _series(baseline, 'puncture_selection_ratio')
+    m_keep = np.clip(1.0 - m_overlay - m_puncture, 0.0, 1.0)
+    g_keep = np.clip(1.0 - g_overlay - g_puncture, 0.0, 1.0)
+
+    fig, ax = plt.subplots(figsize=(10.2, 5.8), constrained_layout=True)
+    ax.plot(x, m_keep, color='tab:blue', marker='o', linewidth=2.0, label='MAPPO keep')
+    ax.plot(x, m_overlay, color='tab:orange', marker='s', linewidth=2.0, label='MAPPO overlay')
+    ax.plot(x, m_puncture, color='tab:red', marker='x', linewidth=2.0, label='MAPPO puncture')
+    ax.plot(x, g_keep, color='tab:cyan', marker='o', linewidth=1.8, linestyle='--', label=f'{baseline_label} keep')
+    ax.plot(x, g_overlay, color='tab:brown', marker='s', linewidth=1.8, linestyle='--', label=f'{baseline_label} overlay')
+    ax.plot(x, g_puncture, color='tab:gray', marker='d', linewidth=1.8, linestyle='--', label=f'{baseline_label} puncture')
+    ax.set_title('Mode action share (including KEEP)')
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel('Share of all Phase-A decisions')
+    ax.grid(True, alpha=0.25)
+    ax.legend(loc='best', fontsize=8, frameon=False, ncol=2)
+    path = RESULTS_DIR / 'mode_action_share_compare.png'
+    fig.savefig(path, dpi=220)
+    plt.close(fig)
+    return path
+
+
+def plot_mode_raw_vs_executed_compare(rl: Dict) -> Path:
+    loads = np.asarray(rl.get('loads', []), dtype=float)
+    total_users = (
+        np.asarray(rl.get('embb_user_count', []), dtype=float)
+        + np.asarray(rl.get('urllc_user_count', []), dtype=float)
+    )
+    use_total_users = bool(total_users.size == loads.size and np.all(total_users > 0.0))
+    x = total_users if use_total_users else loads
+    xlabel = 'Total users in system' if use_total_users else 'Average UE load per UAV'
+
+    def _series(key: str) -> np.ndarray:
+        arr = np.asarray(rl.get(key, []), dtype=float)
+        return arr if arr.size == loads.size else np.zeros_like(loads, dtype=float)
+
+    raw_overlay = _series('raw_overlay_ratio')
+    raw_puncture = _series('raw_puncture_ratio')
+    exe_overlay = _series('executed_overlay_ratio')
+    exe_puncture = _series('executed_puncture_ratio')
+    raw_keep = np.clip(1.0 - raw_overlay - raw_puncture, 0.0, 1.0)
+    exe_keep = np.clip(1.0 - exe_overlay - exe_puncture, 0.0, 1.0)
+
+    fig, ax = plt.subplots(figsize=(10.2, 5.8), constrained_layout=True)
+    ax.plot(x, raw_keep, color='tab:blue', marker='o', linewidth=2.0, label='Raw keep')
+    ax.plot(x, raw_overlay, color='tab:orange', marker='s', linewidth=2.0, label='Raw overlay')
+    ax.plot(x, raw_puncture, color='tab:red', marker='x', linewidth=2.0, label='Raw puncture')
+    ax.plot(x, exe_keep, color='tab:cyan', marker='o', linewidth=1.8, linestyle='--', label='Executed keep')
+    ax.plot(x, exe_overlay, color='tab:brown', marker='s', linewidth=1.8, linestyle='--', label='Executed overlay')
+    ax.plot(x, exe_puncture, color='tab:gray', marker='d', linewidth=1.8, linestyle='--', label='Executed puncture')
+    ax.set_title('MAPPO raw vs executed mode share')
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel('Share of all Phase-A decisions')
+    ax.grid(True, alpha=0.25)
+    ax.legend(loc='best', fontsize=8, frameon=False, ncol=2)
+    path = RESULTS_DIR / 'mode_raw_vs_executed_compare.png'
     fig.savefig(path, dpi=220)
     plt.close(fig)
     return path
@@ -5172,7 +8265,7 @@ def _plot_lambda_sweep_debug_fast_v2(series: Dict[str, object], baseline_label: 
     ax.plot(x, _series(rl, 'puncture_ratio'), color='tab:red', marker='x', markersize=6, linewidth=2.0, label='MAPPO puncture (solid)')
     ax.plot(x, _series(base, 'overlay_ratio'), color='tab:brown', marker='o', markersize=6, linewidth=2.0, linestyle='--', label=f'{baseline_label} superpose/overlay (dashed)')
     ax.plot(x, _series(base, 'puncture_ratio'), color='tab:gray', marker='d', markersize=6, linewidth=2.0, linestyle='--', label=f'{baseline_label} puncture (dashed)')
-    _style(ax, 'Mode ratio', 'Poisson λ (pkts/slot)', 'Ratio')
+    _style(ax, 'Coexistence mode mix (excluding KEEP)', 'Poisson λ (pkts/slot)', 'Ratio')
     ax.legend(loc="best", fontsize=8, frameon=False)
 
     ax = axes[1, 2]
@@ -5260,7 +8353,7 @@ def plot_lambda_sweep_debug_fast(series: Dict[str, object], baseline_label: str 
     ax.plot(x, _series(rl, 'puncture_ratio'), color='tab:red', marker='x', markersize=6, linewidth=2.0, label='MAPPO puncture')
     ax.plot(x, _series(base, 'overlay_ratio'), color='tab:brown', marker='o', markersize=6, linewidth=2.0, linestyle='--', label=f'{baseline_label} superpose/overlay')
     ax.plot(x, _series(base, 'puncture_ratio'), color='tab:gray', marker='d', markersize=6, linewidth=2.0, linestyle='--', label=f'{baseline_label} puncture')
-    _style(ax, 'Mode ratio', 'Poisson λ (pkts/slot)', 'Ratio')
+    _style(ax, 'Coexistence mode mix (excluding KEEP)', 'Poisson λ (pkts/slot)', 'Ratio')
 
     # URLLC throughput.
     ax = axes[1, 2]
@@ -5609,7 +8702,7 @@ def plot_mode_diagnostics(
             continue
         axes[0, 0].plot(loads, data['overlay_ratio'], marker=marker, color=color, linestyle='-', label=f'{prefix} overlay ratio')
         axes[0, 0].plot(loads, data['puncture_ratio'], marker=marker, color=color, linestyle='--', label=f'{prefix} puncture ratio')
-    _style(axes[0, 0], 'Mode selection ratio', 'Average UE load per UAV', 'Ratio')
+    _style(axes[0, 0], 'Coexistence mode mix (excluding KEEP)', 'Average UE load per UAV', 'Ratio')
     axes[0, 0].legend(fontsize=10, ncol=2)
 
     for data, label, color, marker in _comparison_series(greedy_baseline_mode):
@@ -6506,20 +9599,156 @@ def generate_report(
             )
         except ValueError:
             _report_log(f"[OVERRIDE] ignore invalid SR_MAPPO_REPORT_URLLC_RATIO_OVERRIDE={forced_ratio_env!r}")
+    forced_poisson_env = os.environ.get("SR_MAPPO_REPORT_URLLC_POISSON_RATE_OVERRIDE", "").strip()
+    if forced_poisson_env:
+        try:
+            report_cfg.env.urllc_poisson_rate = float(forced_poisson_env)
+            _report_log(
+                f"[OVERRIDE] urllc_poisson_rate={float(report_cfg.env.urllc_poisson_rate):.6f} "
+                f"(from SR_MAPPO_REPORT_URLLC_POISSON_RATE_OVERRIDE={forced_poisson_env})"
+            )
+        except ValueError:
+            _report_log(f"[OVERRIDE] ignore invalid SR_MAPPO_REPORT_URLLC_POISSON_RATE_OVERRIDE={forced_poisson_env!r}")
+    forced_poisson_fixed_env = os.environ.get("SR_MAPPO_REPORT_FIXED_URLLC_POISSON_RATE", "").strip()
+    if forced_poisson_fixed_env:
+        v = forced_poisson_fixed_env.lower()
+        report_cfg.env.fixed_urllc_poisson_rate = bool(v in {"1", "true", "yes", "on"})
+        _report_log(
+            f"[OVERRIDE] fixed_urllc_poisson_rate={int(bool(report_cfg.env.fixed_urllc_poisson_rate))} "
+            f"(from SR_MAPPO_REPORT_FIXED_URLLC_POISSON_RATE={forced_poisson_fixed_env})"
+        )
+    forced_per_user_env = os.environ.get("SR_MAPPO_REPORT_URLLC_POISSON_PER_USER", "").strip()
+    if forced_per_user_env:
+        v = forced_per_user_env.lower()
+        report_cfg.env.urllc_poisson_rate_is_per_user = bool(v in {"1", "true", "yes", "on"})
+        _report_log(
+            f"[OVERRIDE] urllc_poisson_rate_is_per_user={int(bool(report_cfg.env.urllc_poisson_rate_is_per_user))} "
+            f"(from SR_MAPPO_REPORT_URLLC_POISSON_PER_USER={forced_per_user_env})"
+        )
+    forced_cross_mix_cap_map_env = os.environ.get("SR_MAPPO_REPORT_PHASE0_CROSS_MIX_RATE_CAP_MAP_BPS", "").strip()
+    if forced_cross_mix_cap_map_env:
+        try:
+            raw_map = json.loads(forced_cross_mix_cap_map_env)
+            cap_map_bps: Dict[float, float] = {}
+            if isinstance(raw_map, dict):
+                for k, v in raw_map.items():
+                    cap_map_bps[float(k)] = float(v)
+            if cap_map_bps:
+                report_cfg.env.phase0_cross_mix_rate_cap_map_bps = dict(cap_map_bps)
+                _report_log(
+                    "[OVERRIDE] phase0_cross_mix_rate_cap_map_bps="
+                    + json.dumps({f"{float(k):.12g}": float(v) for k, v in cap_map_bps.items()})
+                    + " (from SR_MAPPO_REPORT_PHASE0_CROSS_MIX_RATE_CAP_MAP_BPS)"
+                )
+        except Exception:
+            _report_log(
+                "[OVERRIDE] ignore invalid SR_MAPPO_REPORT_PHASE0_CROSS_MIX_RATE_CAP_MAP_BPS="
+                + repr(forced_cross_mix_cap_map_env)
+            )
+    forced_slot_level_env = os.environ.get("SR_MAPPO_REPORT_URLLC_POISSON_SLOT_LEVEL", "").strip()
+    if forced_slot_level_env:
+        v = forced_slot_level_env.lower()
+        report_cfg.env.urllc_poisson_rate_is_slot_level = bool(v in {"1", "true", "yes", "on"})
+        _report_log(
+            f"[OVERRIDE] urllc_poisson_rate_is_slot_level={int(bool(report_cfg.env.urllc_poisson_rate_is_slot_level))} "
+            f"(from SR_MAPPO_REPORT_URLLC_POISSON_SLOT_LEVEL={forced_slot_level_env})"
+        )
+    forced_fixed_embb_baseline_policy_env = os.environ.get("SR_MAPPO_REPORT_FIXED_EMBB_BASELINE_POLICY", "").strip()
+    if forced_fixed_embb_baseline_policy_env:
+        report_cfg.env.fixed_embb_baseline_policy = str(forced_fixed_embb_baseline_policy_env).strip()
+        _report_log(
+            f"[OVERRIDE] fixed_embb_baseline_policy={report_cfg.env.fixed_embb_baseline_policy} "
+            f"(from SR_MAPPO_REPORT_FIXED_EMBB_BASELINE_POLICY={forced_fixed_embb_baseline_policy_env})"
+        )
+    forced_disallow_keep_pending_env = os.environ.get("SR_MAPPO_REPORT_DISALLOW_KEEP_WHEN_URLLC_PENDING", "").strip()
+    if forced_disallow_keep_pending_env:
+        report_cfg.env.disallow_keep_when_urllc_pending = bool(
+            forced_disallow_keep_pending_env.lower() in {"1", "true", "yes", "on"}
+        )
+        _report_log(
+            f"[OVERRIDE] disallow_keep_when_urllc_pending={int(bool(report_cfg.env.disallow_keep_when_urllc_pending))} "
+            f"(from SR_MAPPO_REPORT_DISALLOW_KEEP_WHEN_URLLC_PENDING={forced_disallow_keep_pending_env})"
+        )
+    frozen_greedy_json_env = os.environ.get("SR_MAPPO_REPORT_FROZEN_GREEDY_JSON", "").strip()
+    if frozen_greedy_json_env:
+        report_cfg.training.frozen_greedy_metrics_path = str(frozen_greedy_json_env)
+        _report_log(
+            "[OVERRIDE] frozen_greedy_metrics_path="
+            f"{report_cfg.training.frozen_greedy_metrics_path} "
+            f"(from SR_MAPPO_REPORT_FROZEN_GREEDY_JSON={frozen_greedy_json_env})"
+        )
+    report_cfg = _maybe_realign_greedy_mix_preset(report_cfg)
 
-    # Share semantics are globally disabled in this branch: never allow share
-    # overrides to affect URLLC admission/scheduling behavior.
+    # Share semantics default to disabled for backward compatibility.
+    # Explicit env override can enable share-mode for controlled A/B comparisons.
+    share_enable_env = os.environ.get("SR_MAPPO_REPORT_ENABLE_GREEDY_SHARE", "").strip().lower()
+    share_enabled = share_enable_env in {"1", "true", "yes", "on"}
     report_cfg.env.greedy_urllc_share_mode = "none"
     report_cfg.env.greedy_urllc_share_ratio = 0.0
     report_cfg.env.greedy_share_reference_pre_mbps_by_load = {}
-    forced_share_env = os.environ.get("SR_MAPPO_REPORT_GREEDY_SHARE_RATIO_OVERRIDE", "").strip()
-    if forced_share_env:
-        _report_log("[OVERRIDE] ignore SR_MAPPO_REPORT_GREEDY_SHARE_RATIO_OVERRIDE because share is disabled.")
-    forced_share_ref_env = os.environ.get("SR_MAPPO_REPORT_GREEDY_SHARE_REFERENCE_PRE_MBPS_BY_LOAD", "").strip()
-    if forced_share_ref_env:
+    if share_enabled:
+        forced_share_mode = os.environ.get("SR_MAPPO_REPORT_GREEDY_SHARE_MODE_OVERRIDE", "").strip().lower()
+        forced_share_ratio = os.environ.get("SR_MAPPO_REPORT_GREEDY_SHARE_RATIO_OVERRIDE", "").strip()
+        forced_share_ref_env = os.environ.get("SR_MAPPO_REPORT_GREEDY_SHARE_REFERENCE_PRE_MBPS_BY_LOAD", "").strip()
+        share_mode = forced_share_mode if forced_share_mode else "fixed_share"
+        if share_mode not in {"none", "fixed_share"}:
+            _report_log(f"[OVERRIDE] invalid share mode {share_mode!r}; fallback to 'fixed_share'")
+            share_mode = "fixed_share"
+        report_cfg.env.greedy_urllc_share_mode = share_mode
+        if forced_share_ratio:
+            try:
+                report_cfg.env.greedy_urllc_share_ratio = float(max(0.0, float(forced_share_ratio)))
+            except ValueError:
+                _report_log(f"[OVERRIDE] ignore invalid SR_MAPPO_REPORT_GREEDY_SHARE_RATIO_OVERRIDE={forced_share_ratio!r}")
+        if forced_share_ref_env:
+            parsed_ref: Dict[float, float] = {}
+            try:
+                for token in forced_share_ref_env.split(","):
+                    token = token.strip()
+                    if not token:
+                        continue
+                    load_s, mbps_s = token.split(":")
+                    parsed_ref[float(load_s.strip())] = float(mbps_s.strip())
+            except Exception:
+                parsed_ref = {}
+                _report_log(
+                    f"[OVERRIDE] ignore invalid SR_MAPPO_REPORT_GREEDY_SHARE_REFERENCE_PRE_MBPS_BY_LOAD={forced_share_ref_env!r}"
+                )
+            report_cfg.env.greedy_share_reference_pre_mbps_by_load = parsed_ref
         _report_log(
-            "[OVERRIDE] ignore SR_MAPPO_REPORT_GREEDY_SHARE_REFERENCE_PRE_MBPS_BY_LOAD because share is disabled."
+            f"[OVERRIDE] greedy share enabled: mode={report_cfg.env.greedy_urllc_share_mode} "
+            f"ratio={float(report_cfg.env.greedy_urllc_share_ratio):.4f} "
+            f"ref_points={len(getattr(report_cfg.env, 'greedy_share_reference_pre_mbps_by_load', {}) or {})}"
         )
+    # Optional report-time override for hard-feasible greedy SIC gate.
+    sic_override_env = os.environ.get("SR_MAPPO_REPORT_GREEDY_HF_EMBB_MIN_SIC_SNIR_DB_OVERRIDE", "").strip()
+    if sic_override_env:
+        try:
+            report_cfg.env.greedy_hf_embb_min_sic_snir_db_override = float(sic_override_env)
+            _report_log(
+                "[OVERRIDE] greedy_hf_embb_min_sic_snir_db_override="
+                f"{float(report_cfg.env.greedy_hf_embb_min_sic_snir_db_override):.3f} dB "
+                f"(from SR_MAPPO_REPORT_GREEDY_HF_EMBB_MIN_SIC_SNIR_DB_OVERRIDE={sic_override_env})"
+            )
+        except ValueError:
+            _report_log(
+                "[OVERRIDE] ignore invalid SR_MAPPO_REPORT_GREEDY_HF_EMBB_MIN_SIC_SNIR_DB_OVERRIDE="
+                f"{sic_override_env!r}"
+            )
+    minrate_scale_env = os.environ.get("SR_MAPPO_REPORT_EMBB_MIN_RATE_SCALE", "").strip()
+    if minrate_scale_env:
+        try:
+            report_cfg.env.report_embb_min_rate_scale = float(minrate_scale_env)
+            _report_log(
+                "[OVERRIDE] report_embb_min_rate_scale="
+                f"{float(report_cfg.env.report_embb_min_rate_scale):.4f} "
+                f"(from SR_MAPPO_REPORT_EMBB_MIN_RATE_SCALE={minrate_scale_env})"
+            )
+        except ValueError:
+            _report_log(
+                "[OVERRIDE] ignore invalid SR_MAPPO_REPORT_EMBB_MIN_RATE_SCALE="
+                f"{minrate_scale_env!r}"
+            )
     # Report-only smoothing guard:
     # In greedy-only + pure eMBB (URLLC ratio forced to 0), if topology/channel are frozen,
     # episodes become near-identical and mean curves look stair-like/noisy across loads.
@@ -6614,6 +9843,10 @@ def generate_report(
                 "Checkpoint experiment_line mismatch: "
                 f"checkpoint has '{ckpt_line}', but report requested '{req_line}'."
             )
+    # Freeze a baseline-only config *before* checkpoint-driven env overrides.
+    # This keeps greedy baseline reproducible across checkpoint changes.
+    baseline_report_cfg = deepcopy(report_cfg)
+
     report_cfg.env.fixed_embb_baseline_policy = checkpoint_cfg.env.fixed_embb_baseline_policy
     report_cfg.env.include_frontier_progress_obs = bool(getattr(checkpoint_cfg.env, "include_frontier_progress_obs", False))
     report_cfg.env.include_quota_progress_obs = bool(getattr(checkpoint_cfg.env, "include_quota_progress_obs", False))
@@ -6694,7 +9927,7 @@ def generate_report(
                 loads,
                 episodes_per_load,
                 checkpoint,
-                base_cfg=report_cfg,
+                base_cfg=baseline_report_cfg,
                 verbose_per_episode=(not (fast_debug and greedy_only and (not FAST_GREEDY_ONLY_VERBOSE_PER_EPISODE))),
             )
         elif greedy_baseline_mode == "myopic_throughput_greedy":
@@ -6702,7 +9935,7 @@ def generate_report(
                 loads,
                 episodes_per_load,
                 checkpoint,
-                base_cfg=report_cfg,
+                base_cfg=baseline_report_cfg,
             )
         elif greedy_baseline_mode == "original":
             baseline_metrics, _baseline_rep = run_greedy_sweep(loads, episodes_per_load)
@@ -6710,7 +9943,7 @@ def generate_report(
             baseline_metrics, _baseline_rep, _frozen = run_selected_greedy_sweep(
                 loads,
                 episodes_per_load,
-                report_cfg,
+                baseline_report_cfg,
                 checkpoint,
             )
         # Keep UAV-UE distribution available in fast-debug mode.
@@ -6766,6 +9999,22 @@ def generate_report(
                 str(plot_greedy_candidate_rejection_debug(
                     baseline_metrics,
                     title_suffix=f"{report_cfg.training.experiment_line} | Greedy candidate diagnostics",
+                )),
+                str(plot_mode_action_share_compare(
+                    baseline_metrics,
+                    baseline_metrics,
+                    baseline_label="Greedy",
+                )),
+                str(plot_mode_raw_vs_executed_compare(baseline_metrics)),
+                str(plot_min_rate_satisfied_count_compare(
+                    baseline_metrics,
+                    baseline_metrics,
+                    baseline_label="Greedy",
+                )),
+                str(plot_admitted_urllc_packets_compare(
+                    baseline_metrics,
+                    baseline_metrics,
+                    baseline_label="Greedy",
                 )),
             ]
         else:
@@ -6827,10 +10076,30 @@ def generate_report(
                     num_uavs=int(debug_num_uavs),
                     num_rbs=int(debug_num_rbs),
                 )),
+                str(plot_mode_action_share_compare(
+                    rl_metrics,
+                    baseline_metrics,
+                    baseline_label="Greedy",
+                )),
+                str(plot_mode_raw_vs_executed_compare(rl_metrics)),
+                str(plot_min_rate_satisfied_count_compare(
+                    rl_metrics,
+                    baseline_metrics,
+                    baseline_label="Greedy",
+                )),
+                str(plot_admitted_urllc_packets_compare(
+                    rl_metrics,
+                    baseline_metrics,
+                    baseline_label="Greedy",
+                )),
             ]
+        sweep_enabled_cfg = bool(getattr(report_cfg.training, "report_enable_lambda_sweep", False))
         sweep_load = float(getattr(report_cfg.training, "report_lambda_sweep_load", 15.0) or 15.0)
         sweep_values = list(getattr(report_cfg.training, "report_lambda_sweep_values", [4.0, 8.0, 12.0, 16.0]) or [4.0, 8.0, 12.0, 16.0])
         sweep_episodes = int(getattr(report_cfg.training, "report_lambda_sweep_episodes_per_lambda", 50) or 50)
+        sweep_enable_env = os.environ.get("SR_MAPPO_REPORT_ENABLE_LAMBDA_SWEEP", "").strip().lower()
+        sweep_enabled_env = sweep_enable_env in {"1", "true", "yes", "on"}
+        sweep_enabled = sweep_enabled_cfg or sweep_enabled_env
         sweep_disable_env = os.environ.get("SR_MAPPO_REPORT_DISABLE_LAMBDA_SWEEP", "").strip().lower()
         sweep_disabled = sweep_disable_env in {"1", "true", "yes", "on"}
         sweep_episodes_override_env = os.environ.get("SR_MAPPO_REPORT_LAMBDA_SWEEP_EPISODES_OVERRIDE", "").strip()
@@ -6847,7 +10116,7 @@ def generate_report(
                     f"{sweep_episodes_override_env!r}"
                 )
         lambda_series = {}
-        if not greedy_only and not sweep_disabled:
+        if not greedy_only and sweep_enabled and not sweep_disabled:
             _report_log(
                 f"Lambda sweep: load={float(sweep_load):.1f} | values={[float(v) for v in list(sweep_values)]} | episodes_per_lambda={int(sweep_episodes)}"
             )
@@ -6857,15 +10126,21 @@ def generate_report(
                 episodes_per_lambda=max(1, sweep_episodes),
                 checkpoint_path=checkpoint,
                 baseline_mode=greedy_baseline_mode,
-                base_cfg=report_cfg,
+                base_cfg=baseline_report_cfg,
             )
             output_paths.append(str(plot_lambda_sweep_debug_fast(lambda_series, baseline_label="Greedy")))
             output_paths.extend([str(path) for path in uav_ue_distribution_paths])
         elif not greedy_only:
-            _report_log(
-                "[OVERRIDE] lambda sweep disabled "
-                f"(from SR_MAPPO_REPORT_DISABLE_LAMBDA_SWEEP={sweep_disable_env!r})"
-            )
+            if sweep_disabled:
+                _report_log(
+                    "[OVERRIDE] lambda sweep disabled "
+                    f"(from SR_MAPPO_REPORT_DISABLE_LAMBDA_SWEEP={sweep_disable_env!r})"
+                )
+            else:
+                _report_log(
+                    "Lambda sweep skipped by default "
+                    "(set report_enable_lambda_sweep=true or SR_MAPPO_REPORT_ENABLE_LAMBDA_SWEEP=1 to enable)."
+                )
             output_paths.extend([str(path) for path in uav_ue_distribution_paths])
 
         # Owner map slot visualization (episode=0, slot=0): greedy snapshot vs MAPPO.
@@ -6919,6 +10194,21 @@ def generate_report(
             num_subcarriers = 0
             num_minislots = 0
 
+        pairing_fairness_audit = _build_pairing_fairness_audit(rl_metrics, baseline_metrics)
+        if bool(pairing_fairness_audit.get("paired_all", False)):
+            _report_log(
+                "[PAIRING] fairness audit passed "
+                f"| loads={int(pairing_fairness_audit.get('loads_compared', 0))} "
+                f"| episode_pairs={int(pairing_fairness_audit.get('total_episode_pairs', 0))}"
+            )
+        else:
+            _report_log(
+                "[PAIRING][WARN] fairness audit failed "
+                f"| mismatched_episode_pairs={int(pairing_fairness_audit.get('mismatched_episode_pairs', 0))} "
+                f"| missing_episode_pairs={int(pairing_fairness_audit.get('missing_episode_pairs', 0))} "
+                f"| mismatch_key_counts={json.dumps(pairing_fairness_audit.get('mismatch_key_counts', {}), sort_keys=True)}"
+            )
+
         metrics_payload = {
             "checkpoint": str(checkpoint),
             "checkpoint_selection_reason": str(checkpoint_reason),
@@ -6937,6 +10227,7 @@ def generate_report(
             "loads": [float(x) for x in list(loads)],
             "episodes_per_load": int(episodes_per_load),
             "same_scenario_pairing_enabled": True,
+            "pairing_fairness_audit": pairing_fairness_audit,
             "report_run_seed_base": int(_REPORT_RUN_SEED_BASE if _REPORT_RUN_SEED_BASE is not None else 0),
             "seeds_used_by_load": {
                 str(float(load)): [int(_report_seed_base(i, report_cfg) + ep) for ep in range(int(episodes_per_load))]
@@ -6947,6 +10238,7 @@ def generate_report(
             "lambda_sweep_episodes_per_lambda": int(sweep_episodes),
             "sr_mappo": rl_metrics,
             "greedy": baseline_metrics,
+            "greedy_representative": {str(float(k)): v for k, v in _baseline_rep.items()},
             "lambda_sweep_debug": lambda_series,
             "uav_ue_distribution": uav_ue_distribution_bundle,
             "uav_ue_distribution_plot_paths": [str(path) for path in uav_ue_distribution_paths],
@@ -6977,6 +10269,17 @@ def generate_report(
             summary_lines.append("num_minislots: n/a")
         summary_lines.append(f"loads: {[float(x) for x in list(loads)]}")
         summary_lines.append(f"episodes_per_load: {int(episodes_per_load)}")
+        summary_lines.append(
+            "pairing_fairness: "
+            f"paired_all={int(bool(pairing_fairness_audit.get('paired_all', False)))} "
+            f"mismatched_episode_pairs={int(pairing_fairness_audit.get('mismatched_episode_pairs', 0))} "
+            f"missing_episode_pairs={int(pairing_fairness_audit.get('missing_episode_pairs', 0))}"
+        )
+        if pairing_fairness_audit.get("mismatch_key_counts"):
+            summary_lines.append(
+                "pairing_fairness_mismatch_keys: "
+                + json.dumps(pairing_fairness_audit.get("mismatch_key_counts", {}), sort_keys=True)
+            )
         summary_lines.append(f"lambda_sweep_load: {float(sweep_load)}")
         summary_lines.append(f"lambda_sweep_values: {[float(v) for v in list(sweep_values)]}")
         summary_lines.append(f"lambda_sweep_episodes_per_lambda: {int(sweep_episodes)}")
@@ -7085,6 +10388,11 @@ def generate_report(
         summary_path = RESULTS_DIR / "fast_debug_summary.txt"
         summary_path.write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
         output_paths.append(str(summary_path))
+        reward_plot = plot_training_reward_debug(
+            _load_history_for_report(report_cfg, checkpoint_path=checkpoint)
+        )
+        if reward_plot is not None:
+            output_paths.append(str(reward_plot))
         frontier_json_path = RESULTS_DIR / "throughput_admission_frontier.json"
         frontier_json_path.write_text(json.dumps({}, indent=2), encoding="utf-8")
         _write_report_manifest({
@@ -7126,8 +10434,11 @@ def generate_report(
         'throughput_feasible_oracle',
         'throughput_biased_greedy',
         'hard_feasible_throughput_greedy',
+        'global_frontier_greedy',
         'myopic_throughput_greedy',
         'throughput_only_greedy',
+        'rate_loss_min_greedy',
+        'force_admit_minloss_greedy',
         'channel_only_greedy',
     }:
         selected_mode = 'original'
@@ -7154,6 +10465,12 @@ def generate_report(
     elif selected_mode == 'throughput_only_greedy':
         greedy_metrics = greedy_bundle['throughput_only_greedy']
         greedy_rep = greedy_reps['throughput_only_greedy']
+    elif selected_mode == 'rate_loss_min_greedy':
+        greedy_metrics = greedy_bundle['rate_loss_min_greedy']
+        greedy_rep = greedy_reps['rate_loss_min_greedy']
+    elif selected_mode == 'force_admit_minloss_greedy':
+        greedy_metrics = greedy_bundle['force_admit_minloss_greedy']
+        greedy_rep = greedy_reps['force_admit_minloss_greedy']
     elif selected_mode == 'hard_feasible_throughput_greedy':
         greedy_metrics = greedy_bundle['hard_feasible_throughput_greedy']
         greedy_rep = greedy_reps['hard_feasible_throughput_greedy']
@@ -7396,6 +10713,22 @@ def generate_report(
         plot_method_decomposition_dense(dense_bundle, RESULTS_DIR, _style, _top_axis_lambda),
         plot_marginal_degradation_slopes(dense_bundle, RESULTS_DIR, _style, _style_power_axis),
         plot_baseline_reference_story(baseline_reference_metrics),
+        plot_mode_action_share_compare(
+            rl_metrics,
+            greedy_metrics,
+            baseline_label=_baseline_label(comparison_baseline_mode),
+        ),
+        plot_mode_raw_vs_executed_compare(rl_metrics),
+        plot_min_rate_satisfied_count_compare(
+            rl_metrics,
+            greedy_metrics,
+            baseline_label=_baseline_label(comparison_baseline_mode),
+        ),
+        plot_admitted_urllc_packets_compare(
+            rl_metrics,
+            greedy_metrics,
+            baseline_label=_baseline_label(comparison_baseline_mode),
+        ),
     ]
     output_paths.extend(uav_ue_distribution_paths)
     _report_log("Figures saved.")

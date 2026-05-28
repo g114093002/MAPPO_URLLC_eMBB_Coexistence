@@ -70,6 +70,12 @@ class CandidatePacket:
     puncture_uav_count: int = 0
     contention_score: float = 0.0
     overlay_urllc_snir: float = 0.0
+    puncture_urllc_snir: float = 0.0
+    overlay_pre_sic_snir: float = 0.0
+    overlay_noise_power: float = 0.0
+    overlay_intercell_interference_power: float = 0.0
+    overlay_local_interference_power: float = 0.0
+    overlay_residual_sic_interference_power: float = 0.0
     post_sic_snir: float = 0.0
     base_embb_snir: float = 0.0
     base_embb_signal_power: float = 0.0

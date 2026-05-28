@@ -7,12 +7,21 @@ BASELINE_ALIASES = {
     "channel_only": "channel_only_greedy",
     "throughput_only": "throughput_only_greedy",
     "tp_only": "throughput_only_greedy",
+    "rate_loss_min": "rate_loss_min_greedy",
+    "global_rate_loss": "rate_loss_min_greedy",
+    "sumrate_minloss": "rate_loss_min_greedy",
+    "global_sumrate_minloss": "rate_loss_min_greedy",
+    "force_admit_minloss": "force_admit_minloss_greedy",
+    "rate_loss_force_admit": "force_admit_minloss_greedy",
+    "sumrate_force_admit": "force_admit_minloss_greedy",
     "myopic": "myopic_throughput_greedy",
     "myopic_tp": "myopic_throughput_greedy",
     "myopic_throughput": "myopic_throughput_greedy",
     "hard_feasible": "hard_feasible_throughput_greedy",
     "hard_feasible_throughput": "hard_feasible_throughput_greedy",
     "hard_feasible_tp": "hard_feasible_throughput_greedy",
+    "global_frontier": "global_frontier_greedy",
+    "global_greedy": "global_frontier_greedy",
     "throughput_feasible": "throughput_feasible_oracle",
     "coexistence_oracle": "throughput_feasible_oracle",
     "matched": "matched_fixed_embb",
@@ -32,10 +41,13 @@ VALID_BASELINE_MODES = {
     "original_greedy_normal_v2",
     "myopic_throughput_greedy",
     "hard_feasible_throughput_greedy",
+    "global_frontier_greedy",
     "matched_fixed_embb",
     "throughput_biased_greedy",
     "throughput_feasible_oracle",
     "throughput_only_greedy",
+    "rate_loss_min_greedy",
+    "force_admit_minloss_greedy",
     "channel_only_greedy",
     "frozen_json",
 }
@@ -46,10 +58,13 @@ BASELINE_LABELS = {
     "original_greedy_normal_v2": "Original Greedy Normal v2",
     "myopic_throughput_greedy": "Myopic Throughput-first Greedy (hard-feasible, weak tie-breaks)",
     "hard_feasible_throughput_greedy": "Hard-feasible Throughput Greedy (admit-only; KEEP iff none feasible)",
+    "global_frontier_greedy": "Global Frontier Greedy (shared score; no mix-specific shaping)",
     "matched_fixed_embb": "Matched Fixed-Power Throughput Oracle",
     "throughput_biased_greedy": "Throughput-biased Greedy (admission-bounded)",
     "throughput_feasible_oracle": "Throughput-feasible Oracle",
     "throughput_only_greedy": "Throughput-only Greedy (eMBB-only ceiling)",
+    "rate_loss_min_greedy": "Rate-loss-min Greedy (pure-sumrate owner + min-loss admit)",
+    "force_admit_minloss_greedy": "Force-admit Min-loss Greedy (pure-sumrate owner + no-KEEP min-loss admit)",
     "channel_only_greedy": "Channel-only Greedy",
     "frozen_json": "Frozen Baseline",
 }
@@ -93,6 +108,22 @@ def baseline_metadata(
             "baseline_is_debug_ceiling": True,
             "baseline_is_main_coexistence_reference": False,
         })
+    elif normalized == "rate_loss_min_greedy":
+        metadata.update({
+            "baseline_objective_type": "global_rate_loss_min_greedy",
+            "baseline_requires_admission_feasible_set": False,
+            "baseline_allows_noop": True,
+            "baseline_is_debug_ceiling": False,
+            "baseline_is_main_coexistence_reference": False,
+        })
+    elif normalized == "force_admit_minloss_greedy":
+        metadata.update({
+            "baseline_objective_type": "force_admit_minloss_greedy",
+            "baseline_requires_admission_feasible_set": True,
+            "baseline_allows_noop": False,
+            "baseline_is_debug_ceiling": False,
+            "baseline_is_main_coexistence_reference": False,
+        })
     elif normalized == "myopic_throughput_greedy":
         metadata.update({
             "baseline_objective_type": "myopic_throughput_greedy",
@@ -104,6 +135,14 @@ def baseline_metadata(
     elif normalized == "hard_feasible_throughput_greedy":
         metadata.update({
             "baseline_objective_type": "hard_feasible_throughput_greedy",
+            "baseline_requires_admission_feasible_set": True,
+            "baseline_allows_noop": False,
+            "baseline_is_debug_ceiling": False,
+            "baseline_is_main_coexistence_reference": normalized == main_mode,
+        })
+    elif normalized == "global_frontier_greedy":
+        metadata.update({
+            "baseline_objective_type": "global_frontier_greedy",
             "baseline_requires_admission_feasible_set": True,
             "baseline_allows_noop": False,
             "baseline_is_debug_ceiling": False,
@@ -174,6 +213,36 @@ def baseline_narrative(
                 )
             ),
         }
+    if normalized == "rate_loss_min_greedy":
+        return {
+            "greedy_objective": (
+                "choose the Phase-0 eMBB owner that maximizes global eMBB sum-rate, "
+                "then choose the URLLC admit action with the minimum global eMBB throughput loss"
+            ),
+            "greedy_admission_role": (
+                "URLLC admission is evaluated through its global eMBB rate damage only; "
+                "min-rate and service-floor shaping are not part of the action score."
+            ),
+            "greedy_noop_policy": (
+                "MODE_KEEP/no-op is part of the comparison set. If every admit action causes "
+                "more global eMBB damage than rejecting, KEEP is selected."
+            ),
+        }
+    if normalized == "force_admit_minloss_greedy":
+        return {
+            "greedy_objective": (
+                "choose the Phase-0 eMBB owner that maximizes global eMBB sum-rate, "
+                "then force a hard-feasible URLLC admit action with the minimum global eMBB throughput loss"
+            ),
+            "greedy_admission_role": (
+                "URLLC admission is mandatory whenever a hard-feasible packet/mode pair exists; "
+                "admit actions are ranked only by their global eMBB throughput damage."
+            ),
+            "greedy_noop_policy": (
+                "KEEP/no-op is not part of the comparison set. It is used only as a hard fallback "
+                "when no feasible admit action exists."
+            ),
+        }
     if normalized == "myopic_throughput_greedy":
         return {
             "greedy_objective": (
@@ -203,6 +272,21 @@ def baseline_narrative(
             "greedy_noop_policy": (
                 "KEEP/no-op is not part of the throughput comparison set. It is chosen only as a hard fallback "
                 "when there is no feasible admit action."
+            ),
+        }
+    if normalized == "global_frontier_greedy":
+        return {
+            "greedy_objective": (
+                "maximize a single shared frontier score that balances retained eMBB throughput, "
+                "URLLC admission pressure, reliability, power efficiency, and per-UAV balance"
+            ),
+            "greedy_admission_role": (
+                "URLLC admission is part of the same global score rather than being handled by "
+                "mix-specific shaping or a pure throughput-only rule."
+            ),
+            "greedy_noop_policy": (
+                "KEEP/no-op is used only when there is no hard-feasible admit action. Among feasible "
+                "admit actions, the baseline selects the highest global frontier score."
             ),
         }
     if normalized == "throughput_biased_greedy":

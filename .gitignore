@@ -4,5 +4,10 @@ checkpoint0421/
 checkpoints_v27_smoke/
 checkpoints_v28_smoke/
 results/
+sr_mappo_result/
+__pycache__/
+*.pyc
+tmp_*.py
+*.bak_codex_*
 *.pt
 *.rar

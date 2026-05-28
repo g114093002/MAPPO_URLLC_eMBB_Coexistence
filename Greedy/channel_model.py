@@ -5,6 +5,7 @@ Implements realistic air-to-ground channel models for UAV communications
 
 import numpy as np
 from config import SystemConfig
+import os
 
 
 class ChannelModel:
@@ -48,8 +49,30 @@ class ChannelModel:
 
         user_positions = np.zeros((num_users, 2), dtype=float)
         serving_hints = np.zeros(num_users, dtype=int)
+        placed_count = 0
+
+        # Runtime geometry controls (env-driven; defaults preserve legacy behavior).
+        spread_scale = float(os.getenv("SR_MAPPO_USER_CLUSTER_SPREAD_SCALE", "1.0") or "1.0")
+        spread_scale = max(spread_scale, 1.0e-6)
+        min_user_spacing = float(os.getenv("SR_MAPPO_USER_MIN_SPACING", "0.0") or "0.0")
+        min_user_spacing = max(min_user_spacing, 0.0)
+        spacing_max_tries = int(os.getenv("SR_MAPPO_USER_MIN_SPACING_MAX_TRIES", "40") or "40")
+        spacing_max_tries = max(spacing_max_tries, 1)
+        intra_cluster_max_dist = float(os.getenv("SR_MAPPO_USER_INTRA_CLUSTER_MAX_DIST", "0.0") or "0.0")
+        intra_cluster_max_dist = max(intra_cluster_max_dist, 0.0)
+        inter_cluster_min_dist = float(os.getenv("SR_MAPPO_USER_INTER_CLUSTER_MIN_DIST", "0.0") or "0.0")
+        inter_cluster_min_dist = max(inter_cluster_min_dist, 0.0)
+        highload_threshold = float(os.getenv("SR_MAPPO_USER_CLUSTER_SPREAD_HIGHLOAD_THRESHOLD", "0.75") or "0.75")
+        highload_scale = float(os.getenv("SR_MAPPO_USER_CLUSTER_SPREAD_HIGHLOAD_SCALE", "1.0") or "1.0")
+        highload_scale = max(highload_scale, 1.0)
+        nested_max_users = int(getattr(self.config, 'nested_load_max_total_users', 0) or 0)
+        load_ratio = (float(num_users) / float(max(nested_max_users, 1))) if nested_max_users > 0 else 0.0
+        dynamic_spread = float(self.config.user_cluster_spread) * spread_scale
+        if nested_max_users > 0 and load_ratio >= highload_threshold:
+            dynamic_spread *= highload_scale
 
         def assign_group_positions(user_indices):
+            nonlocal placed_count
             if len(user_indices) == 0:
                 return
             shuffled = np.asarray(user_indices, dtype=int).copy()
@@ -65,20 +88,65 @@ class ChannelModel:
                 start += quota
                 center = uav_positions[uav_idx]
                 for user_idx in assigned_indices:
-                    offset = self.rng.normal(0.0, self.config.user_cluster_spread, size=2)
-                    pos = center + offset
-                    pos[0] = np.clip(
-                        pos[0],
-                        self.config.user_min_boundary_margin,
-                        self.config.area_width - self.config.user_min_boundary_margin
-                    )
-                    pos[1] = np.clip(
-                        pos[1],
-                        self.config.user_min_boundary_margin,
-                        self.config.area_height - self.config.user_min_boundary_margin
-                    )
+                    pos = None
+                    for _ in range(spacing_max_tries):
+                        offset = self.rng.normal(0.0, dynamic_spread, size=2)
+                        cand = center + offset
+                        cand[0] = np.clip(
+                            cand[0],
+                            self.config.user_min_boundary_margin,
+                            self.config.area_width - self.config.user_min_boundary_margin
+                        )
+                        cand[1] = np.clip(
+                            cand[1],
+                            self.config.user_min_boundary_margin,
+                            self.config.area_height - self.config.user_min_boundary_margin
+                        )
+                        # Keep users reasonably close to their own serving UAV center.
+                        if intra_cluster_max_dist > 0.0:
+                            if float(np.linalg.norm(cand - center)) > intra_cluster_max_dist:
+                                continue
+                        if min_user_spacing <= 0.0 or placed_count <= 0:
+                            # If requested, keep users from different serving clusters apart.
+                            if inter_cluster_min_dist > 0.0 and placed_count > 0:
+                                prev = user_positions[:placed_count]
+                                prev_hints = serving_hints[:placed_count]
+                                other_mask = prev_hints != int(uav_idx)
+                                if np.any(other_mask):
+                                    d_other = np.linalg.norm(prev[other_mask] - cand[None, :], axis=1)
+                                    if float(np.min(d_other)) < inter_cluster_min_dist:
+                                        continue
+                            pos = cand
+                            break
+                        prev = user_positions[:placed_count]
+                        dmin = float(np.min(np.linalg.norm(prev - cand[None, :], axis=1)))
+                        if dmin >= min_user_spacing:
+                            if inter_cluster_min_dist > 0.0:
+                                prev_hints = serving_hints[:placed_count]
+                                other_mask = prev_hints != int(uav_idx)
+                                if np.any(other_mask):
+                                    d_other = np.linalg.norm(prev[other_mask] - cand[None, :], axis=1)
+                                    if float(np.min(d_other)) < inter_cluster_min_dist:
+                                        continue
+                            pos = cand
+                            break
+                    if pos is None:
+                        # Fallback to best-effort placement if spacing constraints are too tight.
+                        offset = self.rng.normal(0.0, dynamic_spread, size=2)
+                        pos = center + offset
+                        pos[0] = np.clip(
+                            pos[0],
+                            self.config.user_min_boundary_margin,
+                            self.config.area_width - self.config.user_min_boundary_margin
+                        )
+                        pos[1] = np.clip(
+                            pos[1],
+                            self.config.user_min_boundary_margin,
+                            self.config.area_height - self.config.user_min_boundary_margin
+                        )
                     user_positions[user_idx] = pos
                     serving_hints[user_idx] = uav_idx
+                    placed_count += 1
 
         configured_embb = int(getattr(self.config, 'num_embb_users', num_users))
         configured_urllc = int(getattr(self.config, 'num_urllc_users', 0))
@@ -251,6 +319,13 @@ class ChannelModel:
 
     def get_association_from_large_scale(self, num_users, num_uavs):
         """Return one serving UAV per user based on long-term channel quality."""
+        # Controlled per-cell experiments can request fixed serving by topology hints
+        # so load/mix effects are not confounded by association re-balancing.
+        if bool(getattr(self.config, "force_serving_hints_association", False)):
+            topology = self.generate_topology(num_users, num_uavs)
+            hints = np.asarray(topology.get("serving_hints", []), dtype=int)
+            if hints.size == int(num_users):
+                return hints.copy()
         avg_gains = self.get_average_large_scale_gains(num_users, num_uavs)
         return np.argmax(avg_gains, axis=1)
     

@@ -98,23 +98,19 @@ class GreedyWarmStartTrainer:
         loader = DataLoader(tensors, batch_size=min(batch_size, len(tensors)), shuffle=True)
         optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate)
         ce = nn.CrossEntropyLoss()
-        mse = nn.MSELoss()
-
         loss_history = []
         for _epoch in range(epochs):
             for batch in loader:
-                local_obs, global_obs, mode_mask, packet_mask, target_mode, target_packet, target_power = [b.to(self.device) for b in batch]
+                local_obs, global_obs, mode_mask, packet_mask, target_mode, target_packet, _target_power = [b.to(self.device) for b in batch]
                 actor_latent, _ = self.model.actor_encoder(local_obs, None)
                 critic_latent, _ = self.model.critic_encoder(global_obs, None)
                 mode_logits = self.model.compute_mode_logits(actor_latent, mode_mask)
                 packet_logits = self.model.compute_packet_logits(actor_latent, target_mode, packet_mask)
-                power_mean = self.model.compute_power_mean(actor_latent, target_mode, target_packet)
                 _value = self.model.value_head(critic_latent)
 
                 mode_loss = ce(mode_logits, target_mode)
                 packet_loss = ce(packet_logits, target_packet)
-                power_loss = mse(torch.tanh(power_mean), target_power)
-                loss = mode_loss + packet_loss + 0.25 * power_loss
+                loss = mode_loss + packet_loss
 
                 optimizer.zero_grad()
                 loss.backward()

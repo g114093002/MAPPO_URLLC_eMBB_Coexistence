@@ -12,6 +12,29 @@ from .run_greedy_mix_share_grid import (
 )
 import matplotlib.pyplot as plt
 
+DEFAULT_NUM_UAVS = 3
+
+
+def _infer_num_uavs(payload: dict) -> int:
+    candidates = (
+        payload.get("num_uavs"),
+        payload.get("scenario", {}).get("num_uavs") if isinstance(payload.get("scenario"), dict) else None,
+        payload.get("meta", {}).get("num_uavs") if isinstance(payload.get("meta"), dict) else None,
+        payload.get("summary", {}).get("num_uavs") if isinstance(payload.get("summary"), dict) else None,
+    )
+    for value in candidates:
+        try:
+            parsed = int(value)
+            if parsed > 0:
+                return parsed
+        except Exception:
+            continue
+    return DEFAULT_NUM_UAVS
+
+
+def _to_system_loads(loads: list[float], num_uavs: int) -> list[float]:
+    return [float(load) * max(int(num_uavs), 1) for load in loads]
+
 
 def _share_key_from_ratio(share_ratio: float) -> str:
     return f"share{int(round(float(share_ratio) * 100)):02d}"
@@ -64,11 +87,12 @@ def _node_to_compact_metrics(node: dict) -> dict:
         "greedy_episode_arrivals_samples": g.get("greedy_episode_arrivals_samples", []),
         "greedy_episode_admitted_samples": g.get("greedy_episode_admitted_samples", []),
         "greedy_episode_budget_used_ratio_samples": g.get("greedy_episode_budget_used_ratio_samples", []),
+        "num_uavs": int(_infer_num_uavs(node)),
     }
 
 
 def _plot_arrival_feasible_admit_per_mix(data: dict, mix_label: str, out_path: Path, share_keys: list[str]) -> None:
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    fig, axes = plt.subplots(1, 3, figsize=(20, 6), constrained_layout=True)
     color_cycle = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
     share_labels = []
     for share_key in share_keys:
@@ -85,7 +109,7 @@ def _plot_arrival_feasible_admit_per_mix(data: dict, mix_label: str, out_path: P
 
     for idx, (_, share_key) in enumerate(share_labels):
         d = data[share_key][mix_label]
-        loads = d.get("loads", [])
+        loads = _to_system_loads(d.get("loads", []), int(d.get("num_uavs", DEFAULT_NUM_UAVS)))
         c = color_cycle[idx % len(color_cycle)]
         axes[0].plot(loads, d.get("urllc_arrived_packets", []), marker="o", color=c, label=f"share {int(share_key.replace('share',''))}%")
         admitted = d.get("urllc_admitted_packets", [])
@@ -95,17 +119,17 @@ def _plot_arrival_feasible_admit_per_mix(data: dict, mix_label: str, out_path: P
         axes[2].plot(loads, not_admitted, marker="o", color=c, label=f"share {int(share_key.replace('share',''))}%")
 
     axes[0].set_title("URLLC arrived packets")
-    axes[0].set_xlabel("Average UE load per UAV")
+    axes[0].set_xlabel("Total system load")
     axes[0].set_ylabel("Packets")
     axes[0].grid(True, alpha=0.3)
 
     axes[1].set_title("URLLC admitted packets")
-    axes[1].set_xlabel("Average UE load per UAV")
+    axes[1].set_xlabel("Total system load")
     axes[1].set_ylabel("Packets")
     axes[1].grid(True, alpha=0.3)
 
     axes[2].set_title("URLLC not-admitted packets")
-    axes[2].set_xlabel("Average UE load per UAV")
+    axes[2].set_xlabel("Total system load")
     axes[2].set_ylabel("Packets")
     axes[2].grid(True, alpha=0.3)
 
@@ -115,7 +139,6 @@ def _plot_arrival_feasible_admit_per_mix(data: dict, mix_label: str, out_path: P
         axes[1].legend(fontsize=9)
         axes[2].legend(fontsize=9)
     fig.suptitle(f"Arrival/Admitted/Not-admitted under eMBB:URLLC={mix_label}")
-    fig.tight_layout()
     fig.savefig(out_path, dpi=200)
     plt.close(fig)
 
@@ -130,7 +153,7 @@ def _plot_share_delta_vs_baseline_per_mix(
     if baseline_share_key not in data or mix_label not in data.get(baseline_share_key, {}):
         return
     base = data[baseline_share_key][mix_label]
-    loads = base.get("loads", [])
+    loads = _to_system_loads(base.get("loads", []), int(base.get("num_uavs", DEFAULT_NUM_UAVS)))
     metrics = [
         ("embb_rate_mbps", "eMBB throughput", "Mbps"),
         ("urllc_admission", "URLLC admission ratio", "ratio"),
@@ -148,7 +171,7 @@ def _plot_share_delta_vs_baseline_per_mix(
     if not candidates:
         return
 
-    fig, axes = plt.subplots(2, 3, figsize=(18, 8))
+    fig, axes = plt.subplots(2, 3, figsize=(20, 9), constrained_layout=True)
     axes = axes.ravel()
     color_cycle = ["#ff7f0e", "#2ca02c", "#d62728", "#9467bd"]
 
@@ -171,13 +194,12 @@ def _plot_share_delta_vs_baseline_per_mix(
             )
         ax.axhline(0.0, color="#666666", linestyle="--", linewidth=1.0)
         ax.set_title(f"{title} (% delta)")
-        ax.set_xlabel("Average UE load per UAV")
+        ax.set_xlabel("Total system load")
         ax.set_ylabel("%")
         ax.grid(True, alpha=0.3)
         ax.legend(fontsize=8)
 
     fig.suptitle(f"Share deltas vs {baseline_share_key.replace('share', 'share ')} under eMBB:URLLC={mix_label}")
-    fig.tight_layout()
     fig.savefig(out_path, dpi=200)
     plt.close(fig)
 

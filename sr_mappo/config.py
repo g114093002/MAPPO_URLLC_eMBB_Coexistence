@@ -101,6 +101,9 @@ class RewardConfig:
     terminal_zero_admission_active_penalty: float = 0.0
     terminal_no_coexistence_with_feasible_penalty: float = 0.0
     selected_puncture_loss_penalty_weight: float = 0.0
+    # Soft admission-guard penalties (hinge above soft threshold, below hard mask).
+    step_admission_guard_soft_loss_penalty_weight: float = 0.0
+    step_admission_guard_soft_intercell_penalty_weight: float = 0.0
     urllc_tx_power_penalty_scale: float = 0.0
     puncture_mode_usage_penalty: float = 0.0
     overlay_retention_gate_bonus_weight: float = 0.0
@@ -349,13 +352,45 @@ class EnvAdapterConfig:
     greedy_hf_min_noma_gain_ratio_override: float = -1.0
     # Set to <= -100 to keep the underlying AlgorithmConfig default.
     greedy_hf_embb_min_sic_snir_db_override: float = -100.0
+    # When True, hard_feasible_throughput_greedy enforces eMBB min-rate as a
+    # strict feasibility gate before admitting URLLC.
+    greedy_hf_enforce_min_rate_hard_gate: bool = False
+    # When True, hard_feasible greedy requires current pre-admission eMBB rates
+    # to satisfy min-rate for all eMBB users before entering throughput
+    # candidate comparison. If unmet, KEEP is selected directly.
+    greedy_hf_require_pre_admission_all_embb_min_rate: bool = False
+    # Build eMBB baseline in two stages:
+    # 1) min-rate feasibility-first allocation
+    # 2) throughput enhancement for remaining RBs
+    phase0_embb_baseline_minrate_first: bool = False
+    # Export per-eMBB-user rate arrays in report metrics (large payload).
+    report_export_embb_user_rates: bool = False
     # URLLC Poisson arrival semantics:
     # - False: urllc_poisson_rate is total slot-level arrival rate (legacy behavior)
     # - True:  urllc_poisson_rate is per-URLLC-user slot-level arrival rate, total scales with user count
-    urllc_poisson_rate_is_per_user: bool = False
+    # New default for current greedy/report line: True (homogeneous per-user lambda0).
+    urllc_poisson_rate_is_per_user: bool = True
+    # Legacy arrival-rate interpretation toggle:
+    # - False: urllc_poisson_rate is an episode-level lambda and is evenly spread
+    #   across minislots at reset time.
+    # - True:  urllc_poisson_rate is already a minislot-level lambda, matching
+    #   older report lines whose total arrivals scaled with num_minislots.
+    urllc_poisson_rate_is_slot_level: bool = False
+    # When nested-load user subsets are enabled, sample per-class (eMBB/URLLC)
+    # user indices with near-equal per-UAV counts to reduce association skew noise.
+    nested_balance_user_split_across_uavs: bool = True
+    # When True under nested-load mode, reuse exactly the same selected user
+    # subset indices for every episode within the same env instance.
+    # This isolates load/mix effects from per-episode subset re-sampling noise.
+    nested_fixed_user_subset_across_episodes: bool = False
+    # When True under nested-load report sweeps, reuse the same canonical
+    # URLLC/eMBB user ordering across different load buckets. Each load still
+    # takes its own class-wise prefix, but the underlying mother-scene ordering
+    # is held fixed to reduce cross-load subset jitter.
+    nested_fixed_user_subset_across_loads: bool = False
     # Hard cap for total URLLC packets generated per episode.
     # Set <=0 to disable capping.
-    urllc_max_packets_per_episode: int = 64
+    urllc_max_packets_per_episode: int = 0
     # When there are URLLC candidates for the current decision cell, disallow KEEP.
     # This applies to both MAPPO and greedy paths via shared action masks.
     disallow_keep_when_urllc_pending: bool = True
@@ -418,6 +453,13 @@ class EnvAdapterConfig:
     # - "snapshot": restore to snapshot owners (legacy)
     # - "best_valid": search a best-effort valid owner map for this RB column (service/min-rate/sum-rate objective)
     phase0_owner_guard_violation_fallback: str = "snapshot"
+    # Finalize-time snapshot rewrite controls for Phase-0 owner maps.
+    # These gates are narrower than the runtime owner guard above: they control
+    # whether snapshot-derived min-rate locks / snapshot restore fallbacks are
+    # applied inside `_finalize_embb_baseline_from_policy()`.
+    phase0_finalize_apply_snapshot_minrate_lock: bool = True
+    phase0_finalize_restore_snapshot_on_minrate_count_regression: bool = True
+    phase0_finalize_restore_snapshot_on_minrate_infeasible: bool = True
 
     # Inter-cell aware power projection (optional; used by service+interference repair presets).
     intercell_aware_power_projection: bool = False
@@ -427,10 +469,31 @@ class EnvAdapterConfig:
     action_intercell_guard_ratio_to_running_min: float = 1.25
     action_intercell_guard_ratio_to_local_min: float = 1.25
     action_intercell_guard_keep_best_feasible: bool = True
+    # Hard admission guards (Phase-A): remove high-damage admit options at mask time.
+    # Set thresholds <= 0 to disable each guard.
+    enable_admission_hard_guards: bool = True
+    admission_hard_guard_max_puncture_loss_mbps: float = 6.5
+    admission_hard_guard_max_intercell_cost_w: float = 1.0e-9
+    # Two-stage guard:
+    # - soft threshold: penalize but still allow.
+    # - hard threshold: mask out (legacy behavior).
+    admission_hard_guard_soft_ratio: float = 0.85
+    admission_hard_guard_hard_ratio: float = 1.00
+    # Training-only jitter around thresholds to reduce overfitting to fixed cutoffs.
+    admission_hard_guard_train_jitter_ratio: float = 0.0
+    # Optional load-aware overrides (nearest-load bucket). Empty => use scalar defaults above.
+    admission_hard_guard_max_puncture_loss_mbps_by_load: Dict[float, float] = field(default_factory=dict)
+    admission_hard_guard_max_intercell_cost_w_by_load: Dict[float, float] = field(default_factory=dict)
+    admission_hard_guard_apply_to_overlay: bool = True
+    admission_hard_guard_apply_to_puncture: bool = True
     good_overlay_retention_threshold: float = 0.85
     good_overlay_intercell_ratio_to_local_min: float = 1.5
-    # Supported snapshot builders: deterministic_max_gain, balanced_round_robin, greedy.
-    fixed_embb_baseline_policy: str = "deterministic_max_gain"
+    # Supported snapshot builders:
+    # - global_sumrate_only: Phase-0 pure aggregate eMBB sum-rate maximization
+    # - global_throughput_consistent: throughput-oriented with extra consistency penalties
+    # - global_pressure_aware: throughput with added service/pressure shaping
+    # - deterministic_max_gain, balanced_round_robin, greedy
+    fixed_embb_baseline_policy: str = "global_sumrate_only"
     embb_power_scale_min: float = 0.80
     embb_power_scale_max: float = 1.10
     # Overlay quality gates (throughput-aware). These make overlay feasible
@@ -485,7 +548,7 @@ class TrainingConfig:
     teacher_guidance_final_scale: float = 0.00
     max_grad_norm: float = 10.0
     learning_rate: float = 2e-4
-    device: str = "cpu"
+    device: str = "auto"
 
     total_iterations: int = 5000
     rollout_horizon: int = 256
@@ -504,6 +567,9 @@ class TrainingConfig:
     eval_episodes: int = 20
     checkpoint_every: int = 50
     enable_timing_logs: bool = False
+    # When True, skip heavyweight per-step debug metric collection in rollout
+    # (owner/phase-A detailed diagnostics) and keep only core training KPIs.
+    fast_metrics: bool = True
     eval_compare_modes: List[str] = field(default_factory=lambda: ["selected", "original", "matched", "throughput_feasible", "throughput_only", "channel_only"])
     early_mode_anchor_end_frac: float = 0.0
     mode_anchor_safe_puncture_loss_threshold: float = 0.0
@@ -516,6 +582,7 @@ class TrainingConfig:
     # Report-side speed toggle: when True, `sr_mappo.report` generates only
     # a minimal set of debug plots (core KPIs + a small lambda sweep).
     report_fast_debug: bool = False
+    report_enable_lambda_sweep: bool = False
     report_lambda_sweep_load: float = 15.0
     report_lambda_sweep_values: List[float] = field(default_factory=lambda: [4.0, 8.0, 12.0, 16.0])
     report_lambda_sweep_episodes_per_lambda: int = 50
@@ -544,6 +611,7 @@ class TrainingConfig:
     load_aware_objective: bool = False
     low_damage_admission_objective: bool = False
     greedy_baseline_mode: str = "matched_fixed_embb"
+    frozen_greedy_metrics_path: str = ""
 
     sic_curriculum_start_db: float = -4.0
     sic_curriculum_end_db: float = 0.0

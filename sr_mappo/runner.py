@@ -17,7 +17,7 @@ def _policy_actions_from_output(agent_ids, output):
         actions[agent_id] = HybridAction(
             mode=int(output.mode[idx].item()),
             packet_option=int(output.packet_option[idx].item()),
-            power_delta=float(output.power_delta[idx].item()),
+            power_delta=0.0,
             embb_owner_option=int(output.embb_owner_option[idx].item()),
             embb_power_delta=float(output.embb_power_delta[idx].item()),
         )
@@ -26,7 +26,7 @@ def _policy_actions_from_output(agent_ids, output):
 
 def run_smoke_test():
     sys_cfg = SystemConfig()
-    sys_cfg.num_subcarriers = 8
+    sys_cfg.num_subcarriers = 12
     sys_cfg.num_embb_users = 20
     sys_cfg.num_urllc_users = 8
     sys_cfg.refresh_derived_params()

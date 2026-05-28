@@ -13,6 +13,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
+DEFAULT_NUM_UAVS = 3
+
 
 def _format_share_label_from_pct(share_pct: int) -> str:
     return "greedy" if int(share_pct) == 0 else f"share {int(share_pct)}%"
@@ -24,6 +26,19 @@ def _format_share_label_from_key(share_key: str) -> str:
     except Exception:
         share_pct = 0
     return _format_share_label_from_pct(share_pct)
+
+
+def _format_mix_label(mix_label: str) -> str:
+    return f"eMBB:URLLC={str(mix_label).split('(', 1)[0].strip()}"
+
+
+def _to_system_loads(loads, num_uavs: int):
+    return np.asarray(loads, dtype=float) * max(int(num_uavs), 1)
+
+
+def _primary_system_loads(data: dict) -> np.ndarray:
+    loads = np.asarray(data.get("loads", []), dtype=float)
+    return _to_system_loads(loads, int(data.get("num_uavs", DEFAULT_NUM_UAVS)))
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -138,6 +153,7 @@ def _load_greedy_metrics(path: Path) -> dict:
         "greedy_episode_arrivals_samples": g.get("greedy_episode_arrivals_samples", []),
         "greedy_episode_admitted_samples": g.get("greedy_episode_admitted_samples", []),
         "greedy_episode_budget_used_ratio_samples": g.get("greedy_episode_budget_used_ratio_samples", []),
+        "num_uavs": int(j.get("num_uavs", DEFAULT_NUM_UAVS) or DEFAULT_NUM_UAVS),
     }
 
 
@@ -239,7 +255,9 @@ def _plot_grid(data: dict, out_path: Path) -> None:
             ("urllc_tp_mbps", "URLLC throughput (slot est.)", "Mbps"),
             ("urllc_admitted_packets", "URLLC admitted packets", "Packets"),
         ]
-        fig, axes = plt.subplots(1, 4, figsize=(24, 5.5))
+        fig, axes = plt.subplots(1, 4, figsize=(26, 6.4), constrained_layout=True)
+        legend_handles = None
+        legend_labels = None
         share_colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2"]
         for c, (k, title, ylab) in enumerate(metrics):
             ax = axes[c]
@@ -249,7 +267,7 @@ def _plot_grid(data: dict, out_path: Path) -> None:
                 d = data[share_key][mix_label]
                 share_pct = int(share_key.replace("share", ""))
                 ax.plot(
-                    d["loads"],
+                    _primary_system_loads(d),
                     d[k],
                     marker="o",
                     linewidth=2,
@@ -257,12 +275,21 @@ def _plot_grid(data: dict, out_path: Path) -> None:
                     label=_format_share_label_from_pct(share_pct),
                 )
             ax.set_title(title)
-            ax.set_xlabel("Average UE load per UAV")
+            ax.set_xlabel("Total system load")
             ax.set_ylabel(ylab)
             ax.grid(True, alpha=0.35)
-            ax.legend(fontsize=9)
+            legend_handles, legend_labels = ax.get_legend_handles_labels()
         fig.suptitle(f"Greedy Mix ({mix_label}) Share Comparison", fontsize=16)
-        fig.tight_layout(rect=[0, 0.02, 1, 0.95])
+        if legend_handles and legend_labels:
+            fig.legend(
+                legend_handles,
+                legend_labels,
+                loc="upper center",
+                bbox_to_anchor=(0.5, 1.03),
+                ncol=min(len(legend_labels), 4),
+                frameon=False,
+                fontsize=10,
+            )
         fig.savefig(out_path, dpi=220)
         plt.close(fig)
         return
@@ -271,9 +298,11 @@ def _plot_grid(data: dict, out_path: Path) -> None:
         ("urllc_admission", "URLLC admission ratio", "Ratio"),
         ("urllc_tp_mbps", "URLLC throughput (slot est.)", "Mbps"),
     ]
-    fig, axes = plt.subplots(len(share_keys), 3, figsize=(18, max(5 * len(share_keys), 6)))
+    fig, axes = plt.subplots(len(share_keys), 3, figsize=(21, max(5.6 * len(share_keys), 6.8)), constrained_layout=True)
     if len(share_keys) == 1:
         axes = np.asarray([axes])
+    legend_handles = None
+    legend_labels = None
     for r, share_key in enumerate(share_keys):
         share_pct = int(share_key.replace("share", ""))
         for c, (k, title, ylab) in enumerate(metrics):
@@ -283,12 +312,12 @@ def _plot_grid(data: dict, out_path: Path) -> None:
                 if k == "urllc_admission" and mix == "10:0":
                     continue
                 ax.plot(
-                    d["loads"],
+                    _primary_system_loads(d),
                     d[k],
                     marker="o",
                     linewidth=2,
                     color=color_map[mix],
-                    label=mix,
+                    label=_format_mix_label(mix),
                 )
             if r == 0:
                 ax.set_title(title)
@@ -296,12 +325,21 @@ def _plot_grid(data: dict, out_path: Path) -> None:
                 ax.set_ylabel(f"Share={share_pct}%\n{ylab}")
             else:
                 ax.set_ylabel(ylab)
-            ax.set_xlabel("Average UE load per UAV")
+            ax.set_xlabel("Total system load")
             ax.grid(True, alpha=0.35)
             if r == 0 and c == 0:
-                ax.legend(fontsize=9)
+                legend_handles, legend_labels = ax.get_legend_handles_labels()
     fig.suptitle(f"Greedy Mix ({'/'.join(mixes_present)}) x Share Comparison", fontsize=16)
-    fig.tight_layout(rect=[0, 0.02, 1, 0.97])
+    if legend_handles and legend_labels:
+        fig.legend(
+            legend_handles,
+            legend_labels,
+            loc="upper center",
+            bbox_to_anchor=(0.5, 1.02),
+            ncol=min(len(legend_labels), 4),
+            frameon=False,
+            fontsize=10,
+        )
     fig.savefig(out_path, dpi=220)
     plt.close(fig)
 
@@ -322,7 +360,7 @@ def _plot_per_mix_share_comparison(
             share_pct = int(share_num)
         except ValueError:
             continue
-            share_labels.append((share_key, _format_share_label_from_pct(share_pct)))
+        share_labels.append((share_key, _format_share_label_from_pct(share_pct)))
     color_cycle = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
     color_map = {label: color_cycle[idx % len(color_cycle)] for idx, (_, label) in enumerate(share_labels)}
     metrics = [
@@ -340,13 +378,15 @@ def _plot_per_mix_share_comparison(
 
     ncols = 3
     nrows = int(np.ceil(len(metrics) / ncols))
-    fig, axes = plt.subplots(nrows, ncols, figsize=(18, 4.8 * nrows))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(21, 5.4 * nrows), constrained_layout=True)
     axes = np.asarray(axes).ravel()
+    legend_handles = None
+    legend_labels = None
     for ax, (k, title, ylab) in zip(axes, metrics):
         baseline_loads = None
         baseline_pre = None
         if k == "embb_rate_pre_urllc_admission_mbps" and embb_only_baseline is not None:
-            baseline_loads = np.asarray(embb_only_baseline.get("loads", []), dtype=float)
+            baseline_loads = _primary_system_loads(embb_only_baseline)
             baseline_pre = np.asarray(
                 embb_only_baseline.get(
                     "embb_rate_pre_urllc_admission_mbps",
@@ -367,7 +407,7 @@ def _plot_per_mix_share_comparison(
                 y = baseline_pre * (1.0 - share_ratio)
                 x = baseline_loads
             else:
-                x = d["loads"]
+                x = _primary_system_loads(d)
                 y = d[k]
             ax.plot(
                 x,
@@ -388,7 +428,7 @@ def _plot_per_mix_share_comparison(
             )
             if b_loads.size and b_embb.size:
                 ax.plot(
-                    b_loads,
+                    _to_system_loads(b_loads, int(embb_only_baseline.get("num_uavs", DEFAULT_NUM_UAVS))),
                     b_embb,
                     linestyle="--",
                     linewidth=2.2,
@@ -396,14 +436,27 @@ def _plot_per_mix_share_comparison(
                     label="pre-URLLC eMBB baseline (same mix)",
                 )
         ax.set_title(title)
-        ax.set_xlabel("Average UE load per UAV")
+        ax.set_xlabel("Total system load")
         ax.set_ylabel(ylab)
+        if share_labels:
+            first_share_key = share_labels[0][0]
+            if first_share_key in data and mix_label in data[first_share_key]:
+                ax.set_xticks(_primary_system_loads(data[first_share_key][mix_label]))
         ax.grid(True, alpha=0.35)
-        ax.legend(fontsize=9)
+        legend_handles, legend_labels = ax.get_legend_handles_labels()
     for ax in axes[len(metrics):]:
         ax.axis("off")
     fig.suptitle(f"Greedy Share Comparison under eMBB:URLLC = {mix_label}", fontsize=15)
-    fig.tight_layout(rect=[0, 0.02, 1, 0.96])
+    if legend_handles and legend_labels:
+        fig.legend(
+            legend_handles,
+            legend_labels,
+            loc="upper center",
+            bbox_to_anchor=(0.5, 1.02),
+            ncol=min(len(legend_labels), 4),
+            frameon=False,
+            fontsize=10,
+        )
     fig.savefig(out_path, dpi=220)
     plt.close(fig)
 
@@ -434,30 +487,43 @@ def _plot_per_share_mix_comparison(data: dict, share_key: str, out_path: Path) -
     share_pct = int(share_key.replace("share", ""))
     ncols = 3
     nrows = int(np.ceil(len(metrics) / ncols))
-    fig, axes = plt.subplots(nrows, ncols, figsize=(18, 4.8 * nrows))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(21, 5.4 * nrows), constrained_layout=True)
     axes = np.asarray(axes).ravel()
+    legend_handles = None
+    legend_labels = None
     for ax, (k, title, ylab) in zip(axes, metrics):
         for mix_label in mix_order:
             d = data[share_key][mix_label]
             if k == "urllc_admission" and mix_label == "10:0":
                 continue
             ax.plot(
-                d["loads"],
+                _primary_system_loads(d),
                 d[k],
                 marker="o",
                 linewidth=2,
                 color=color_map[mix_label],
-                label=mix_label,
+                label=_format_mix_label(mix_label),
             )
         ax.set_title(title)
-        ax.set_xlabel("Average UE load per UAV")
+        ax.set_xlabel("Total system load")
         ax.set_ylabel(ylab)
+        if mix_order:
+            ax.set_xticks(_primary_system_loads(data[share_key][mix_order[0]]))
         ax.grid(True, alpha=0.35)
-        ax.legend(fontsize=9)
+        legend_handles, legend_labels = ax.get_legend_handles_labels()
     for ax in axes[len(metrics):]:
         ax.axis("off")
     fig.suptitle(f"Greedy Mix Comparison under Share={share_pct}%", fontsize=15)
-    fig.tight_layout(rect=[0, 0.02, 1, 0.96])
+    if legend_handles and legend_labels:
+        fig.legend(
+            legend_handles,
+            legend_labels,
+            loc="upper center",
+            bbox_to_anchor=(0.5, 1.02),
+            ncol=min(len(legend_labels), 4),
+            frameon=False,
+            fontsize=10,
+        )
     fig.savefig(out_path, dpi=220)
     plt.close(fig)
 

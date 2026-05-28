@@ -199,6 +199,15 @@ def _trainer_timing_log(cfg, message: str) -> None:
     print(f"[{timestamp}] [SR-MAPPO][TIMING] {message}", flush=True)
 
 
+def _resolve_training_device(requested: str) -> str:
+    req = str(requested or "auto").strip().lower()
+    if req in {"", "auto", "default"}:
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    if req.startswith("cuda"):
+        return req if torch.cuda.is_available() else "cpu"
+    return req
+
+
 def _value_for_load(mapping, actual_load: float, default: float) -> float:
     if not mapping:
         return float(default)
@@ -1031,7 +1040,11 @@ class SRMAPPOTrainer:
         self.env = env
         self.model = model
         self.cfg = cfg
-        self.device = torch.device(cfg.training.device)
+        self.device_requested = str(getattr(cfg.training, "device", "auto") or "auto")
+        self.device_resolved = _resolve_training_device(self.device_requested)
+        # Keep downstream components on the same resolved device.
+        self.cfg.training.device = str(self.device_resolved)
+        self.device = torch.device(self.device_resolved)
         self.model.to(self.device)
         actor_params, critic_params = _split_actor_critic_parameters(self.model)
         self.base_actor_lr = float(cfg.training.learning_rate)
@@ -1060,6 +1073,7 @@ class SRMAPPOTrainer:
     def collect_rollout(self, horizon: Optional[int] = None, seed: Optional[int] = None, iteration: int = 1):
         horizon = horizon or self.cfg.training.rollout_horizon
         seed = self.cfg.training.train_seed if seed is None else seed
+        collect_detailed_metrics = not bool(getattr(self.cfg.training, "fast_metrics", True))
         episode_seed = int(seed)
         observations, _info = self.env.reset(seed=episode_seed)
         actor_hidden, critic_hidden = self.model.initial_state(batch_size=len(self.env.agent_ids), device=self.device)
@@ -1173,6 +1187,31 @@ class SRMAPPOTrainer:
         steps = 0
         done = False
         agent_index = {agent_id: idx for idx, agent_id in enumerate(self.env.agent_ids)}
+        # Precompute whether expensive auxiliary targets are actually needed this rollout.
+        distill_coef_now = float(teacher_distill_coef(self.cfg, int(iteration)))
+        greedy_bc_coef_now = float(greedy_reference_bc_coef(self.cfg, int(iteration)))
+        need_teacher_distill_targets = bool(
+            distill_coef_now > 1.0e-12
+            and (
+                float(getattr(self.cfg.training, "teacher_admission_loss_weight", 0.0) or 0.0) > 1.0e-12
+                or float(getattr(self.cfg.training, "teacher_mode_loss_weight", 0.0) or 0.0) > 1.0e-12
+            )
+        )
+        need_greedy_bc_targets = bool(
+            greedy_bc_coef_now > 1.0e-12
+            and bool(getattr(self.cfg.training, "use_greedy_reference_bc", False))
+            and (
+                float(getattr(self.cfg.training, "greedy_bc_mode_weight", 0.0) or 0.0) > 1.0e-12
+                or float(getattr(self.cfg.training, "greedy_bc_packet_weight", 0.0) or 0.0) > 1.0e-12
+                or float(getattr(self.cfg.training, "greedy_bc_owner_weight", 0.0) or 0.0) > 1.0e-12
+            )
+        )
+        need_phase_a_anchor_targets = bool(
+            bool(getattr(self.cfg.training, "use_phase_a_embb_power_anchor", False))
+            and float(getattr(self.cfg.training, "phase_a_embb_power_anchor_weight", 0.0) or 0.0) > 1.0e-12
+            and phase_a_embb_power_anchor_enabled(self.cfg, int(iteration))
+        )
+
         while steps < horizon:
             obs_build_start = perf_counter()
             local_obs_np = np.stack([observations[agent_id].local_obs for agent_id in self.env.agent_ids]).astype(np.float32)
@@ -1186,38 +1225,61 @@ class SRMAPPOTrainer:
                 env=self.env,
                 target_policy=self.cfg.training.aux_target_policy,
             )
-            teacher_admission_target, teacher_mode_target, teacher_admission_weight, teacher_mode_weight = (
-                _teacher_distillation_targets(
+            num_agents = len(self.env.agent_ids)
+            if need_teacher_distill_targets:
+                teacher_admission_target, teacher_mode_target, teacher_admission_weight, teacher_mode_weight = (
+                    _teacher_distillation_targets(
+                        self.env,
+                        observations,
+                        self.cfg,
+                    )
+                )
+            else:
+                teacher_admission_target = np.zeros(num_agents, dtype=np.int64)
+                teacher_mode_target = np.zeros(num_agents, dtype=np.int64)
+                teacher_admission_weight = np.zeros(num_agents, dtype=np.float32)
+                teacher_mode_weight = np.zeros(num_agents, dtype=np.float32)
+            obs_build_sec += perf_counter() - obs_build_start
+
+            greedy_bc_start = perf_counter()
+            if need_greedy_bc_targets:
+                (
+                    greedy_bc_mode_target,
+                    greedy_bc_packet_target,
+                    greedy_bc_owner_target,
+                    greedy_bc_mode_weight,
+                    greedy_bc_packet_weight,
+                    greedy_bc_owner_weight,
+                    phase_a_mask,
+                ) = _greedy_reference_bc_targets(
                     self.env,
                     observations,
                     self.cfg,
                 )
-            )
-            obs_build_sec += perf_counter() - obs_build_start
-
-            greedy_bc_start = perf_counter()
-            (
-                greedy_bc_mode_target,
-                greedy_bc_packet_target,
-                greedy_bc_owner_target,
-                greedy_bc_mode_weight,
-                greedy_bc_packet_weight,
-                greedy_bc_owner_weight,
-                phase_a_mask,
-            ) = _greedy_reference_bc_targets(
-                self.env,
-                observations,
-                self.cfg,
-            )
-            (
-                phase_a_embb_power_anchor_target,
-                phase_a_embb_power_anchor_weight,
-            ) = _phase_a_embb_power_anchor_targets(
-                self.env,
-                observations,
-                self.cfg,
-                iteration=int(iteration),
-            )
+            else:
+                greedy_bc_mode_target = np.zeros(num_agents, dtype=np.int64)
+                greedy_bc_packet_target = np.zeros(num_agents, dtype=np.int64)
+                greedy_bc_owner_target = np.zeros(num_agents, dtype=np.int64)
+                greedy_bc_mode_weight = np.zeros(num_agents, dtype=np.float32)
+                greedy_bc_packet_weight = np.zeros(num_agents, dtype=np.float32)
+                greedy_bc_owner_weight = np.zeros(num_agents, dtype=np.float32)
+                phase_a_mask = np.asarray(
+                    [0.0 if bool(observations[agent_id].metadata.get("planning_phase", 0.0)) else 1.0 for agent_id in self.env.agent_ids],
+                    dtype=np.float32,
+                )
+            if need_phase_a_anchor_targets:
+                (
+                    phase_a_embb_power_anchor_target,
+                    phase_a_embb_power_anchor_weight,
+                ) = _phase_a_embb_power_anchor_targets(
+                    self.env,
+                    observations,
+                    self.cfg,
+                    iteration=int(iteration),
+                )
+            else:
+                phase_a_embb_power_anchor_target = np.zeros(num_agents, dtype=np.float32)
+                phase_a_embb_power_anchor_weight = np.zeros(num_agents, dtype=np.float32)
             greedy_bc_target_sec += perf_counter() - greedy_bc_start
 
             obs_tensor_start = perf_counter()
@@ -1244,7 +1306,7 @@ class SRMAPPOTrainer:
             mode_entropy_values.append(float(output.mode_entropy.mean().item()))
             packet_entropy_values.append(float(output.packet_entropy.mean().item()))
             owner_logits_np = None
-            if getattr(output, "embb_owner_logits", None) is not None:
+            if collect_detailed_metrics and getattr(output, "embb_owner_logits", None) is not None:
                 try:
                     owner_logits_np = output.embb_owner_logits.detach().cpu().numpy()
                 except Exception:
@@ -1255,10 +1317,12 @@ class SRMAPPOTrainer:
                 joint_actions[agent_id] = HybridAction(
                     mode=int(output.mode[idx].item()),
                     packet_option=int(output.packet_option[idx].item()),
-                    power_delta=float(output.power_delta[idx].item()),
+                    power_delta=0.0,
                     embb_owner_option=int(output.embb_owner_option[idx].item()),
                     embb_power_delta=float(output.embb_power_delta[idx].item()),
                 )
+                if not collect_detailed_metrics:
+                    continue
                 head_activity = self.env.action_head_activity(observations[agent_id])
                 if head_activity["planning_phase"] and head_activity["owner_active"]:
                     _uav_idx, _rb_idx, snapshot_owner, candidates = _planning_owner_context(agent_id, observations[agent_id])
@@ -1396,6 +1460,46 @@ class SRMAPPOTrainer:
                 head_activity = self.env.action_head_activity(observations[agent_id])
                 if head_activity["planning_phase"]:
                     planning_agent_decisions += 1
+                if not collect_detailed_metrics:
+                    diff_flags = self.env.action_diff_flags(joint_actions[agent_id], resolved[agent_id].action)
+                    raw_executed_mode_gap_total += int(diff_flags["mode"])
+                    raw_executed_packet_gap_total += int(diff_flags["packet"])
+                    raw_executed_power_gap_total += int(diff_flags["power"])
+                    raw_executed_owner_gap_total += int(diff_flags["owner"])
+                    raw_executed_embb_power_gap_total += int(diff_flags["embb_power"])
+                    raw_executed_any_gap_total += int(any(diff_flags.values()))
+                    if not head_activity["planning_phase"]:
+                        phase_a_mode_decisions_total += 1
+                        raw_overlay_count += int(int(joint_actions[agent_id].mode) == MODE_OVERLAY)
+                        raw_puncture_count += int(int(joint_actions[agent_id].mode) == MODE_PUNCTURE)
+                        executed_overlay_count += int(int(resolved[agent_id].action.mode) == MODE_OVERLAY)
+                        executed_puncture_count += int(int(resolved[agent_id].action.mode) == MODE_PUNCTURE)
+                        mode_rewritten = bool(diff_flags["mode"])
+                        owner_rewritten = bool(diff_flags["owner"])
+                        packet_invalid_rewritten = bool(
+                            resolved[agent_id].packet_invalid_fallback
+                            or resolved[agent_id].mask_invalid_fallback
+                        )
+                        power_projection_applied = bool(diff_flags["power"] or diff_flags["embb_power"])
+                        any_safety_rewrite = bool(
+                            mode_rewritten
+                            or owner_rewritten
+                            or packet_invalid_rewritten
+                            or resolved[agent_id].used_greedy_fallback
+                            or resolved[agent_id].collision_rewritten
+                            or resolved[agent_id].joint_reliability_rewritten
+                        )
+                        mode_rewrite_total += int(mode_rewritten)
+                        owner_rewrite_total += int(owner_rewritten)
+                        packet_rewrite_total += int(packet_invalid_rewritten)
+                        power_projection_total += int(power_projection_applied)
+                        any_safety_rewrite_total += int(any_safety_rewrite)
+                        shield_corrections_total += int(any_safety_rewrite)
+                        mode_correction_count += int(bool(resolved[agent_id].mode_corrected))
+                        packet_invalid_count += int(bool(resolved[agent_id].packet_invalid_fallback))
+                        mask_invalid_count += int(bool(resolved[agent_id].mask_invalid_fallback))
+                        joint_rewrite_count += int(bool(resolved[agent_id].joint_reliability_rewritten))
+                    continue
                 if head_activity["owner_active"]:
                     owner_head_active_total += 1
                     owner_space = str(getattr(self.cfg.action, "embb_owner_action_space", "candidate_option_with_null") or "candidate_option_with_null").strip().lower()
@@ -1487,15 +1591,20 @@ class SRMAPPOTrainer:
             policy_forward_sec += perf_counter() - policy_forward_start
 
             env_step_start = perf_counter()
-            next_obs, rewards_dict, dones_dict, _infos = self.env.step(joint_actions)
+            next_obs, rewards_dict, dones_dict, _infos = self.env.step(
+                joint_actions,
+                prebuilt_observations=observations,
+                pre_resolved_actions=resolved,
+            )
             env_step_sec += perf_counter() - env_step_start
             ref_info = _infos[self.env.agent_ids[0]]
-            for agent_id in self.env.agent_ids:
-                step_info = _infos.get(agent_id, {})
-                if not bool(step_info.get("planning_phase", False)):
-                    continue
-                if len(owner_decode_debug_examples) >= 10:
-                    continue
+            if collect_detailed_metrics:
+                for agent_id in self.env.agent_ids:
+                    step_info = _infos.get(agent_id, {})
+                    if not bool(step_info.get("planning_phase", False)):
+                        continue
+                    if len(owner_decode_debug_examples) >= 10:
+                        continue
                 if "raw_embb_owner_option" not in step_info:
                     continue
                 snapshot_owner_id = int(step_info.get("snapshot_owner_id", -1))
@@ -1507,9 +1616,9 @@ class SRMAPPOTrainer:
                     valid_owner_mask = [int(i) for i in np.where(owner_mask > 0.5)[0].tolist()]
                 except Exception:
                     valid_owner_mask = []
-                owner_decode_debug_examples.append(
-                    (snapshot_owner_id, sampled_option, decoded_raw_owner_id, valid_owner_mask)
-                )
+                    owner_decode_debug_examples.append(
+                        (snapshot_owner_id, sampled_option, decoded_raw_owner_id, valid_owner_mask)
+                    )
             for key, value in ref_info.get('reward_terms', {}).items():
                 reward_term_totals[key] = reward_term_totals.get(key, 0.0) + float(value)
             rewards_np = np.asarray([rewards_dict[agent_id] for agent_id in self.env.agent_ids], dtype=np.float32)
@@ -2070,6 +2179,18 @@ class SRMAPPOTrainer:
                 'reward_term_terminal_phase_a_effective_nonzero_floor_penalty': float(
                     np.mean([item.get('reward_term_terminal_phase_a_effective_nonzero_floor_penalty', 0.0) for item in episode_summaries])
                 ),
+                'terminal_debug_embb_total_rate': float(
+                    np.mean([item.get('terminal_debug_embb_total_rate', 0.0) for item in episode_summaries])
+                ),
+                'terminal_debug_greedy_embb_total_rate': float(
+                    np.mean([item.get('terminal_debug_greedy_embb_total_rate', 0.0) for item in episode_summaries])
+                ),
+                'terminal_debug_embb_rate_gain_vs_greedy': float(
+                    np.mean([item.get('terminal_debug_embb_rate_gain_vs_greedy', 0.0) for item in episode_summaries])
+                ),
+                'terminal_debug_embb_rate_gain_weight': float(
+                    np.mean([item.get('terminal_debug_embb_rate_gain_weight', 0.0) for item in episode_summaries])
+                ),
             })
         if steps > 0:
             for key, value in reward_term_totals.items():
@@ -2413,6 +2534,8 @@ def build_default_components(cfg):
     sys_cfg, urllc_cfg, embb_cfg, algo_cfg, sim_cfg = _build_main_like_configs()
 
     env = SRMAPPOPhaseAEnv(sys_cfg, urllc_cfg, embb_cfg, algo_cfg, sim_cfg, cfg)
+    # Enable training-only admission-guard jitter to reduce threshold overfitting.
+    env.admission_guard_training_jitter_enabled = True
     model = SRMAPPOActorCritic(env.local_obs_dim, env.global_obs_dim, cfg)
     set_phase_a_embb_power_runtime(env, model, bool(getattr(cfg.env, "allow_phase_a_embb_power_adjustment", False)))
     trainer = SRMAPPOTrainer(env, model, cfg)
@@ -2462,6 +2585,9 @@ def run_training_loop(cfg, evaluation_fn=None, resume_path: Optional[Path] = Non
         history = list(resume_extra.get('history', []) or [])
 
     summary = {
+        "device_requested": str(getattr(trainer, "device_requested", getattr(cfg.training, "device", "auto"))),
+        "device_resolved": str(getattr(trainer, "device_resolved", getattr(cfg.training, "device", "cpu"))),
+        "cuda_available": bool(torch.cuda.is_available()),
         "phase0_owner_change_budget_mode": str(getattr(cfg.env, "phase0_owner_change_budget_mode", "unknown")),
         "allow_phase_a_embb_power_adjustment": bool(getattr(cfg.env, "allow_phase_a_embb_power_adjustment", False)),
         "urllc_poisson_rate": float(getattr(env.sim_cfg, "urllc_poisson_rate", 0.0)),
@@ -2732,6 +2858,7 @@ def run_training_loop(cfg, evaluation_fn=None, resume_path: Optional[Path] = Non
                 return evaluation_fn(env, model, target_cfg)
         return evaluation_fn(env, model, target_cfg)
 
+    total_episodes_completed = 0
     for iteration in range(start_iteration, cfg.training.total_iterations + 1):
         iteration_start = perf_counter()
         checkpoint_sec = 0.0
@@ -2767,6 +2894,11 @@ def run_training_loop(cfg, evaluation_fn=None, resume_path: Optional[Path] = Non
             seed=cfg.training.train_seed + iteration,
             iteration=iteration,
         )
+        episodes_this_iteration = max(
+            int(round(float(rollout_stats.get("episodes_completed", 0.0) or 0.0))),
+            0,
+        )
+        total_episodes_completed += int(episodes_this_iteration)
         rollout_sec = perf_counter() - rollout_start
         guidance_scale = teacher_guidance_scale(cfg, iteration)
         distill_coef = teacher_distill_coef(cfg, iteration)
@@ -2785,6 +2917,8 @@ def run_training_loop(cfg, evaluation_fn=None, resume_path: Optional[Path] = Non
         update_sec = perf_counter() - update_start
         record = {
             'iteration': iteration,
+            'episodes_this_iteration': int(episodes_this_iteration),
+            'episodes_completed_total': int(total_episodes_completed),
             'curriculum_target_load': chosen_load,
             'curriculum_actual_load': actual_load,
             'teacher_guidance_scale': guidance_scale,
@@ -3664,7 +3798,9 @@ def run_training_loop(cfg, evaluation_fn=None, resume_path: Optional[Path] = Non
                 latest_eval = best_reward_summary
             timestamp = _tw_timestamp()
             msg = (
-                f"[{timestamp}] [SR-MAPPO] episode {iteration}/{cfg.training.total_iterations} | "
+                f"[{timestamp}] [SR-MAPPO] iter {iteration}/{cfg.training.total_iterations} | "
+                f"ep(iter)={int(episodes_this_iteration)} | "
+                f"ep(total)={int(total_episodes_completed)} | "
                 f"target_load={chosen_load if chosen_load is not None else 'na'} | "
                 f"actual_load={actual_load if actual_load is not None else 'na'} | "
                 f"rollout_reward={rollout_reward:.4f} | "
@@ -3824,6 +3960,11 @@ def run_training_loop(cfg, evaluation_fn=None, resume_path: Optional[Path] = Non
             msg += (
                 f" | rollout_tpW={float(rollout_stats.get('mean_throughput_per_watt', 0.0)) / 1.0e6:.3f} Mb/W"
                 f" | rollout_served_rate={float(rollout_stats.get('mean_avg_throughput_per_served_embb_user', 0.0)) / 1.0e6:.3f} Mbps"
+                f" | term_dbg(rate/base/gain/w)="
+                f"{float(rollout_stats.get('terminal_debug_embb_total_rate', 0.0)) / 1.0e6:.3f}/"
+                f"{float(rollout_stats.get('terminal_debug_greedy_embb_total_rate', 0.0)) / 1.0e6:.3f}/"
+                f"{float(rollout_stats.get('terminal_debug_embb_rate_gain_vs_greedy', 0.0)):.3f}/"
+                f"{float(rollout_stats.get('terminal_debug_embb_rate_gain_weight', 0.0)):.3f}"
                 f" | phaseA_pwr_active={int(bool(record.get('control', {}).get('phase_a_embb_power_runtime_enabled', False)))}"
                 f" | phaseA_pwr_anchor={int(bool(record.get('control', {}).get('phase_a_embb_power_anchor_enabled', False)))}"
             )

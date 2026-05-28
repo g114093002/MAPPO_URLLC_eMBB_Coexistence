@@ -11,6 +11,21 @@ EXPERIMENT_PURE_PPO_FF_V1 = "pure_ppo_ff_v1"
 EXPERIMENT_PURE_PPO_FF_V1_NO_SHIELD_NO_REWRITE_V1 = "pure_ppo_ff_v1_no_shield_no_rewrite_v1"
 EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_V1 = "pure_ppo_ff_v1_no_greedy_obs_v1"
 EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_V1 = "pure_ppo_ff_v1_no_greedy_obs_planning_multiobj_v1"
+EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_V1 = "pure_ppo_ff_v1_no_greedy_obs_planning_multiobj_globaltp_v1"
+EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_QUICKCHECK_V1 = "pure_ppo_ff_v1_no_greedy_obs_planning_multiobj_globaltp_quickcheck_v1"
+EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V1 = "pure_ppo_ff_v1_no_greedy_obs_planning_multiobj_globaltp_adm_quickcheck_v1"
+EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V2 = "pure_ppo_ff_v1_no_greedy_obs_planning_multiobj_globaltp_adm_quickcheck_v2"
+EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V3 = "pure_ppo_ff_v1_no_greedy_obs_planning_multiobj_globaltp_adm_quickcheck_v3"
+EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V4_NO_PHASE0_REWRITE_DEBUG = "pure_ppo_ff_v1_no_greedy_obs_planning_multiobj_globaltp_adm_quickcheck_v4_no_phase0_rewrite_debug"
+EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V5_NO_FINALIZE_SNAPSHOT_REWRITE_DEBUG = "pure_ppo_ff_v1_no_greedy_obs_planning_multiobj_globaltp_adm_quickcheck_v5_no_finalize_snapshot_rewrite_debug"
+EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V6_OWNER_QUALITY_DEBUG = "pure_ppo_ff_v1_no_greedy_obs_planning_multiobj_globaltp_adm_quickcheck_v6_owner_quality_debug"
+EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V7_SMALL_EDIT_CONSTRAINED_RL = "pure_ppo_ff_v1_no_greedy_obs_planning_multiobj_globaltp_adm_quickcheck_v7_small_edit_constrained_rl"
+EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V8_SMALL_EDIT_UNLOCK = "pure_ppo_ff_v1_no_greedy_obs_planning_multiobj_globaltp_adm_quickcheck_v8_small_edit_unlock"
+EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V9_ADMISSION_PUNCTURE_PUSH = "pure_ppo_ff_v1_no_greedy_obs_planning_multiobj_globaltp_adm_quickcheck_v9_admission_puncture_push"
+EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V10_OWNER_PHASEA_POWER = "pure_ppo_ff_v1_no_greedy_obs_planning_multiobj_globaltp_adm_quickcheck_v10_owner_phasea_power"
+EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V11_PHASEA_POWER_EFFECTIVE = "pure_ppo_ff_v1_no_greedy_obs_planning_multiobj_globaltp_adm_quickcheck_v11_phasea_power_effective"
+EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V12_HIGHLOAD_ADMISSION_STABLE = "pure_ppo_ff_v1_no_greedy_obs_planning_multiobj_globaltp_adm_quickcheck_v12_highload_admission_stable"
+EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V13_MODE_PUSH = "pure_ppo_ff_v1_no_greedy_obs_planning_multiobj_globaltp_adm_quickcheck_v13_mode_push"
 EXPERIMENT_ABLATION_PHASE0_FROZEN_GREEDY_PHASE_A_ONLY = "ablation_phase0_frozen_greedy_phase_a_only"
 EXPERIMENT_ABLATION_PHASE0_ONLY_FROZEN_PHASE_A = "ablation_phase0_only_frozen_phase_a"
 EXPERIMENT_PHASE0_COMMITTED_PHASEA_ON_CLEAN = "phase0_committed_phasea_on_clean"
@@ -39,6 +54,7 @@ EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_SHARE10
 EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX37_DEBUG = "phase0_joint_full_power_service_interference_repair_v8_greedy_mix37_debug"
 EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX55_DEBUG = "phase0_joint_full_power_service_interference_repair_v8_greedy_mix55_debug"
 EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX73_DEBUG = "phase0_joint_full_power_service_interference_repair_v8_greedy_mix73_debug"
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX73_DEBUG_STRICT_MINRATE_GATE = "phase0_joint_full_power_service_interference_repair_v8_greedy_mix73_debug_strict_minrate_gate"
 EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX010_DEBUG = "phase0_joint_full_power_service_interference_repair_v8_greedy_mix010_debug"
 EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX100_DEBUG = "phase0_joint_full_power_service_interference_repair_v8_greedy_mix100_debug"
 EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_SHARE20_DEBUG = "phase0_joint_full_power_service_interference_repair_v8_greedy_share20_debug"
@@ -51,6 +67,7 @@ EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DO
 EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_5_INTERCELL_GUARD_OWNER_UNFREEZE = "phase0_joint_full_power_service_interference_repair_v8_mappo_mix73_dominance_v1_5_intercell_guard_owner_unfreeze"
 EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_6_INTERCELL_GUARD_OWNER_EFFECTIVE = "phase0_joint_full_power_service_interference_repair_v8_mappo_mix73_dominance_v1_6_intercell_guard_owner_effective"
 EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_7_OWNER_BUDGET_ADMISSION_STABLE = "phase0_joint_full_power_service_interference_repair_v8_mappo_mix73_dominance_v1_7_owner_budget_admission_stable"
+EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_8_POWER_INTERCELL_GUARDRAIL = "phase0_joint_full_power_service_interference_repair_v8_mappo_mix73_dominance_v1_8_power_intercell_guardrail"
 EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V2_WARMUP = "phase0_joint_full_power_service_interference_repair_v8_mappo_mix73_dominance_v2_warmup"
 EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V3_ACTION_REWARD_ALIGNED = "phase0_joint_full_power_service_interference_repair_v8_mappo_mix73_dominance_v3_action_reward_aligned"
 EXPERIMENT_FAIR = "fair_fixed_baseline"
@@ -118,6 +135,21 @@ EXPERIMENT_CHOICES = [
     EXPERIMENT_PURE_PPO_FF_V1_NO_SHIELD_NO_REWRITE_V1,
     EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_V1,
     EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_V1,
+    EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_V1,
+    EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_QUICKCHECK_V1,
+    EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V1,
+    EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V2,
+    EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V3,
+    EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V4_NO_PHASE0_REWRITE_DEBUG,
+    EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V5_NO_FINALIZE_SNAPSHOT_REWRITE_DEBUG,
+    EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V6_OWNER_QUALITY_DEBUG,
+    EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V7_SMALL_EDIT_CONSTRAINED_RL,
+    EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V8_SMALL_EDIT_UNLOCK,
+    EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V9_ADMISSION_PUNCTURE_PUSH,
+    EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V10_OWNER_PHASEA_POWER,
+    EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V11_PHASEA_POWER_EFFECTIVE,
+    EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V12_HIGHLOAD_ADMISSION_STABLE,
+    EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V13_MODE_PUSH,
     EXPERIMENT_ABLATION_PHASE0_FROZEN_GREEDY_PHASE_A_ONLY,
     EXPERIMENT_ABLATION_PHASE0_ONLY_FROZEN_PHASE_A,
     EXPERIMENT_PHASE0_COMMITTED_PHASEA_ON_CLEAN,
@@ -146,6 +178,7 @@ EXPERIMENT_CHOICES = [
     EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX37_DEBUG,
     EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX55_DEBUG,
     EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX73_DEBUG,
+    EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX73_DEBUG_STRICT_MINRATE_GATE,
     EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX010_DEBUG,
     EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX100_DEBUG,
     EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_SHARE20_DEBUG,
@@ -158,6 +191,7 @@ EXPERIMENT_CHOICES = [
     EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_5_INTERCELL_GUARD_OWNER_UNFREEZE,
     EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_6_INTERCELL_GUARD_OWNER_EFFECTIVE,
     EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_7_OWNER_BUDGET_ADMISSION_STABLE,
+    EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_8_POWER_INTERCELL_GUARDRAIL,
     EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V2_WARMUP,
     EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V3_ACTION_REWARD_ALIGNED,
     EXPERIMENT_FAIR,
@@ -415,6 +449,8 @@ def normalize_experiment_line(line: str | None) -> str:
         "mappo_mix73_dominance_v1_6": EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_6_INTERCELL_GUARD_OWNER_EFFECTIVE,
         "mix73_dominance_v1_7": EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_7_OWNER_BUDGET_ADMISSION_STABLE,
         "mappo_mix73_dominance_v1_7": EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_7_OWNER_BUDGET_ADMISSION_STABLE,
+        "mix73_dominance_v1_8": EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_8_POWER_INTERCELL_GUARDRAIL,
+        "mappo_mix73_dominance_v1_8": EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_8_POWER_INTERCELL_GUARDRAIL,
         "mix73_dominance_v2": EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V2_WARMUP,
         "mappo_mix73_dominance_v2": EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V2_WARMUP,
         "mix73_dominance_v3": EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V3_ACTION_REWARD_ALIGNED,
@@ -423,6 +459,26 @@ def normalize_experiment_line(line: str | None) -> str:
         "no_shield_min_safe": EXPERIMENT_NO_SHIELD_MIN_SAFE,
         "noshield_raw": EXPERIMENT_NO_SHIELD_RAW,
         "no_shield_raw": EXPERIMENT_NO_SHIELD_RAW,
+        "quickcheck_v4_no_phase0_rewrite": EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V4_NO_PHASE0_REWRITE_DEBUG,
+        "quickcheck_v4_no_phase0_rewrite_debug": EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V4_NO_PHASE0_REWRITE_DEBUG,
+        "quickcheck_v5_no_finalize_snapshot_rewrite": EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V5_NO_FINALIZE_SNAPSHOT_REWRITE_DEBUG,
+        "quickcheck_v5_no_finalize_snapshot_rewrite_debug": EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V5_NO_FINALIZE_SNAPSHOT_REWRITE_DEBUG,
+        "quickcheck_v6_owner_quality": EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V6_OWNER_QUALITY_DEBUG,
+        "quickcheck_v6_owner_quality_debug": EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V6_OWNER_QUALITY_DEBUG,
+        "quickcheck_v7_small_edit": EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V7_SMALL_EDIT_CONSTRAINED_RL,
+        "quickcheck_v7_small_edit_constrained": EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V7_SMALL_EDIT_CONSTRAINED_RL,
+        "quickcheck_v7_small_edit_constrained_rl": EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V7_SMALL_EDIT_CONSTRAINED_RL,
+        "quickcheck_v8_small_edit_unlock": EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V8_SMALL_EDIT_UNLOCK,
+        "quickcheck_v9_admission_puncture_push": EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V9_ADMISSION_PUNCTURE_PUSH,
+        "quickcheck_v9_admission_push": EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V9_ADMISSION_PUNCTURE_PUSH,
+        "quickcheck_v10_owner_phasea_power": EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V10_OWNER_PHASEA_POWER,
+        "quickcheck_v10": EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V10_OWNER_PHASEA_POWER,
+        "quickcheck_v11_phasea_power_effective": EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V11_PHASEA_POWER_EFFECTIVE,
+        "quickcheck_v11": EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V11_PHASEA_POWER_EFFECTIVE,
+        "quickcheck_v12_highload_admission_stable": EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V12_HIGHLOAD_ADMISSION_STABLE,
+        "quickcheck_v12": EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V12_HIGHLOAD_ADMISSION_STABLE,
+        "quickcheck_v13_mode_push": EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V13_MODE_PUSH,
+        "quickcheck_v13": EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V13_MODE_PUSH,
     }
     value = aliases.get(value, value)
     if value in {EXPERIMENT_MANUAL, *EXPERIMENT_CHOICES}:
@@ -437,6 +493,11 @@ def experiment_label(line: str | None) -> str:
         EXPERIMENT_PURE_PPO_FF_V1_NO_SHIELD_NO_REWRITE_V1: "Pure Feedforward PPO No-Shield No-Rewrite v1 (Raw MAPPO Diagnostic)",
         EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_V1: "Pure Feedforward PPO No Greedy Obs v1 (True Observation Space)",
         EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_V1: "Pure FFO No Greedy Obs Multi-Obj Planning v1 (Balanced eMBB Quality)",
+        EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V4_NO_PHASE0_REWRITE_DEBUG: "Pure FFO No Greedy Obs Multi-Obj GlobalTP+Admission Quickcheck v4 (No Phase-0 Rewrite Debug)",
+        EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V5_NO_FINALIZE_SNAPSHOT_REWRITE_DEBUG: "Pure FFO No Greedy Obs Multi-Obj GlobalTP+Admission Quickcheck v5 (No Finalize Snapshot Rewrite Debug)",
+        EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V6_OWNER_QUALITY_DEBUG: "Pure FFO No Greedy Obs Multi-Obj GlobalTP+Admission Quickcheck v6 (Owner Quality Debug)",
+        EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V12_HIGHLOAD_ADMISSION_STABLE: "Pure FFO No Greedy Obs Multi-Obj GlobalTP+Admission Quickcheck v12 (High-Load Admission Stable)",
+        EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V13_MODE_PUSH: "Pure FFO No Greedy Obs Multi-Obj GlobalTP+Admission Quickcheck v13 (Mode Push)",
         EXPERIMENT_ABLATION_PHASE0_FROZEN_GREEDY_PHASE_A_ONLY: "Ablation: Phase-0 Frozen to Greedy, Phase-A Only Learning",
         EXPERIMENT_ABLATION_PHASE0_ONLY_FROZEN_PHASE_A: "Ablation: Phase-0 Learning Only, Phase-A eMBB Power Frozen",
         EXPERIMENT_PHASE0_COMMITTED_PHASEA_ON_CLEAN: "Clean Main Diagnostic: Phase-0 Committed Budget + Phase-A eMBB Power (No Shield/Rewrite/Greedy)",
@@ -474,6 +535,7 @@ EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DO
     EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_5_INTERCELL_GUARD_OWNER_UNFREEZE: "Phase-0 Joint Full-Power v8 MAPPO Mix 7:3 Dominance-Constraint v1.5 Intercell-Guard Owner-Unfreeze",
     EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_6_INTERCELL_GUARD_OWNER_EFFECTIVE: "Phase-0 Joint Full-Power v8 MAPPO Mix 7:3 Dominance-Constraint v1.6 Intercell-Guard Owner-Effective",
     EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_7_OWNER_BUDGET_ADMISSION_STABLE: "Phase-0 Joint Full-Power v8 MAPPO Mix 7:3 Dominance-Constraint v1.7 Owner-Budget + Admission-Stable",
+    EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_8_POWER_INTERCELL_GUARDRAIL: "Phase-0 Joint Full-Power v8 MAPPO Mix 7:3 Dominance-Constraint v1.8 Power+Intercell Guardrail",
     EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V2_WARMUP: "Phase-0 Joint Full-Power v8 MAPPO Mix 7:3 Dominance-Constraint v2 Warmup",
 EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V3_ACTION_REWARD_ALIGNED: "Phase-0 Joint Full-Power v8 MAPPO Mix 7:3 Dominance-Constraint v3 Action+Reward Aligned",
         EXPERIMENT_PHASE0_JOINT_OWNER_POWER_DECOUPLED: "Phase-0 Joint Owner+Power (Decoupled Rewards, No Shield, Myopic Baseline)",
@@ -1426,9 +1488,11 @@ def apply_experiment_preset(cfg: SRMAPPOConfig, line: str | None) -> SRMAPPOConf
         updated.env.greedy_urllc_share_ratio = 0.10
         # User composition override for report/compare density scenario: eMBB:URLLC = 3:7.
         updated.env.urllc_user_ratio_override = 0.70
-        updated.env.urllc_poisson_rate_is_per_user = False
-        updated.env.urllc_poisson_rate = 25.6
-        updated.env.fixed_urllc_poisson_rate = False
+        updated.env.urllc_poisson_rate_is_per_user = True
+        updated.env.urllc_poisson_rate = 0.6
+        # Keep per-user lambda invariant across load scaling.
+        updated.env.fixed_urllc_poisson_rate = True
+        updated.env.urllc_max_packets_per_episode = 0
         updated.env.freeze_association_across_episodes = False
         updated.env.freeze_channel_gains_across_episodes = False
         # Candidate-supply diagnosis knobs: keep URLLC packets visible after release
@@ -1452,9 +1516,11 @@ def apply_experiment_preset(cfg: SRMAPPOConfig, line: str | None) -> SRMAPPOConf
         updated.env.greedy_urllc_share_ratio = 0.10
         # User composition override for report/compare density scenario: eMBB:URLLC = 5:5.
         updated.env.urllc_user_ratio_override = 0.50
-        updated.env.urllc_poisson_rate_is_per_user = False
-        updated.env.urllc_poisson_rate = 25.6
-        updated.env.fixed_urllc_poisson_rate = False
+        updated.env.urllc_poisson_rate_is_per_user = True
+        updated.env.urllc_poisson_rate = 0.6
+        # Keep per-user lambda invariant across load scaling.
+        updated.env.fixed_urllc_poisson_rate = True
+        updated.env.urllc_max_packets_per_episode = 0
         updated.env.freeze_association_across_episodes = False
         updated.env.freeze_channel_gains_across_episodes = False
         # Candidate-supply knobs: increase pre-admission candidate availability
@@ -1476,9 +1542,11 @@ def apply_experiment_preset(cfg: SRMAPPOConfig, line: str | None) -> SRMAPPOConf
         updated.env.greedy_urllc_share_ratio = 0.10
         # User composition override for report/compare density scenario: eMBB:URLLC = 7:3.
         updated.env.urllc_user_ratio_override = 0.30
-        updated.env.urllc_poisson_rate_is_per_user = False
-        updated.env.urllc_poisson_rate = 25.6
-        updated.env.fixed_urllc_poisson_rate = False
+        updated.env.urllc_poisson_rate_is_per_user = True
+        updated.env.urllc_poisson_rate = 0.6
+        # Keep per-user lambda invariant across load scaling.
+        updated.env.fixed_urllc_poisson_rate = True
+        updated.env.urllc_max_packets_per_episode = 0
         updated.env.freeze_association_across_episodes = False
         updated.env.freeze_channel_gains_across_episodes = False
         # Candidate-supply knobs: increase pre-admission candidate availability
@@ -1488,6 +1556,17 @@ def apply_experiment_preset(cfg: SRMAPPOConfig, line: str | None) -> SRMAPPOConf
         # Keep diagnostic feasibility gate overrides aligned with mix37 runs.
         updated.env.greedy_hf_min_noma_gain_ratio_override = 0.95
         updated.env.greedy_hf_embb_min_sic_snir_db_override = -2.0
+        return updated
+
+    if normalized == EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX73_DEBUG_STRICT_MINRATE_GATE:
+        # Strict min-rate gate ablation over the current mix73 greedy line.
+        updated = apply_experiment_preset(updated, EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_GREEDY_MIX73_DEBUG)
+        updated.training.experiment_line = normalized
+        updated.training.run_name = "sr_mappo_phase0_joint_full_power_service_interference_repair_v8_greedy_mix73_debug_strict_minrate_gate"
+        updated.env.greedy_hf_enforce_min_rate_hard_gate = True
+        updated.env.greedy_hf_require_pre_admission_all_embb_min_rate = True
+        updated.env.phase0_embb_baseline_minrate_first = True
+        updated.env.report_export_embb_user_rates = True
         return updated
 
     if normalized == EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1:
@@ -1719,15 +1798,26 @@ def apply_experiment_preset(cfg: SRMAPPOConfig, line: str | None) -> SRMAPPOConf
         )
         updated.training.experiment_line = normalized
         updated.training.run_name = "sr_mappo_phase0_joint_full_power_service_interference_repair_v8_mappo_mix73_dominance_v1_7_owner_budget_admission_stable"
+        # Reduce in-training eval frequency so long sparse eval does not stall optimization progress.
+        updated.training.light_eval_every = 200
 
-        # Owner budget: allow more than one effective change per slot under committed mode.
-        updated.env.phase0_owner_change_budget_mode = "full_snapshot_legacy"
-        updated.env.phase0_owner_max_change_ratio = 0.50
+        # Owner execution quality: reduce raw churn and bias toward executable/effective edits.
+        updated.env.phase0_owner_change_budget_mode = "committed_only"
+        updated.env.phase0_owner_max_change_ratio = 0.18
+        updated.env.phase0_owner_guard_enabled = True
+        updated.env.phase0_owner_service_preserve_guard = True
+        updated.env.phase0_owner_rate_preserve_guard = True
+        updated.env.phase0_owner_allow_change_only_if_projected_service_not_worse = True
+        updated.env.phase0_owner_allow_change_only_if_projected_minrate_not_worse = True
 
         # Reduce harmful accepted changes and push objective consistency.
-        updated.env.owner_max_negative_accept_ratio = 0.45
-        updated.reward.owner_harmful_change_penalty_weight = 0.16
-        updated.reward.owner_dropped_raw_churn_penalty_weight = 0.012
+        updated.env.owner_max_negative_accept_ratio = 0.25
+        updated.reward.owner_harmful_change_penalty_weight = 0.30
+        updated.reward.owner_dropped_raw_churn_penalty_weight = 0.060
+        updated.reward.owner_negative_service_gain_penalty_weight = 0.80
+        updated.reward.owner_negative_rate_gain_penalty_weight = 0.50
+        updated.reward.owner_positive_service_gain_bonus_weight = 0.20
+        updated.reward.owner_positive_rate_gain_bonus_weight = 0.10
 
         # Add stronger pressure against intercell-heavy / power-heavy actions so
         # admission gains are less likely to be bought by interference/power spikes.
@@ -1737,6 +1827,75 @@ def apply_experiment_preset(cfg: SRMAPPOConfig, line: str | None) -> SRMAPPOConf
         updated.reward.terminal_intercell_power_penalty_weight = 11.0
         updated.reward.terminal_puncture_intercell_penalty_weight = 5.5
         updated.reward.high_intercell_admission_penalty_weight = 0.80
+
+        # Local puncture control: hard-prune high-loss puncture candidates + stronger penalties.
+        updated.training.puncture_loss_ceiling_by_load = {
+            9.0: 0.70e6,
+            12.0: 0.62e6,
+            15.0: 0.56e6,
+            18.0: 0.50e6,
+            21.0: 0.45e6,
+            24.0: 0.40e6,
+        }
+        updated.reward.selected_puncture_loss_penalty_weight = 0.70
+        updated.reward.terminal_puncture_loss_penalty_weight = 2.40
+        # Admission hard guards (load-aware): lower intercell/puncture damage at medium-high loads.
+        updated.env.enable_admission_hard_guards = True
+        updated.env.admission_hard_guard_max_puncture_loss_mbps = 6.5
+        updated.env.admission_hard_guard_max_intercell_cost_w = 1.0e-9
+        updated.env.admission_hard_guard_max_puncture_loss_mbps_by_load = {
+            9.0: 7.5,
+            12.0: 7.0,
+            15.0: 6.5,
+            18.0: 6.2,
+            21.0: 6.0,
+            24.0: 6.0,
+        }
+        updated.env.admission_hard_guard_max_intercell_cost_w_by_load = {
+            9.0: 1.2e-9,
+            12.0: 1.1e-9,
+            15.0: 1.0e-9,
+            18.0: 0.95e-9,
+            21.0: 0.90e-9,
+            24.0: 0.90e-9,
+        }
+        updated.env.admission_hard_guard_apply_to_overlay = True
+        updated.env.admission_hard_guard_apply_to_puncture = True
+        updated.env.admission_hard_guard_soft_ratio = 0.85
+        updated.env.admission_hard_guard_hard_ratio = 1.00
+        updated.env.admission_hard_guard_train_jitter_ratio = 0.08
+        updated.reward.step_admission_guard_soft_loss_penalty_weight = 0.35
+        updated.reward.step_admission_guard_soft_intercell_penalty_weight = 0.30
+
+        # High-load reweight (18/21/24): protect service/min-rate and discourage power-heavy policies.
+        updated.reward.terminal_embb_service_floor_by_load = {
+            9.0: 0.24,
+            12.0: 0.24,
+            15.0: 0.23,
+            18.0: 0.25,
+            21.0: 0.26,
+            24.0: 0.27,
+        }
+        updated.reward.terminal_embb_min_rate_floor_by_load = {
+            9.0: 0.18,
+            12.0: 0.18,
+            15.0: 0.18,
+            18.0: 0.20,
+            21.0: 0.22,
+            24.0: 0.24,
+        }
+        updated.reward.terminal_embb_service_floor_penalty_weight = 3.5
+        updated.reward.terminal_embb_min_rate_floor_penalty_weight = 2.8
+        updated.reward.terminal_admission_floor_soft_penalty_weight_by_load = {
+            9.0: 1.0,
+            12.0: 1.2,
+            15.0: 1.4,
+            18.0: 2.1,
+            21.0: 2.8,
+            24.0: 3.4,
+        }
+        updated.reward.terminal_total_power_over_greedy_penalty_weight = 4.5
+        updated.reward.terminal_embb_power_over_greedy_penalty_weight = 3.0
 
         # Keep admission more stable at medium/high load.
         updated.training.selection_admission_floor_ratio_to_baseline = 0.95
@@ -1748,6 +1907,54 @@ def apply_experiment_preset(cfg: SRMAPPOConfig, line: str | None) -> SRMAPPOConf
             18.0: 0.61,
             21.0: 0.58,
             24.0: 0.58,
+        }
+        return updated
+
+    if normalized == EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_8_POWER_INTERCELL_GUARDRAIL:
+        # v1.8: minimal-step patch on top of v1.7
+        # Goal: keep admission gains while reducing high-load power/intercell damage
+        # and preventing high-load eMBB throughput collapse.
+        updated = apply_experiment_preset(
+            updated,
+            EXPERIMENT_PHASE0_JOINT_FULL_POWER_SERVICE_INTERFERENCE_REPAIR_V8_MAPPO_MIX73_DOMINANCE_V1_7_OWNER_BUDGET_ADMISSION_STABLE,
+        )
+        updated.training.experiment_line = normalized
+        updated.training.run_name = "sr_mappo_phase0_joint_full_power_service_interference_repair_v8_mappo_mix73_dominance_v1_8_power_intercell_guardrail"
+
+        # Slightly stronger intercell and power shaping (minimal increment from v1.7).
+        updated.reward.step_action_intercell_penalty_weight = 2.40
+        updated.reward.step_intercell_outgoing_delta_penalty_weight = 4.60
+        updated.reward.terminal_intercell_rate_loss_ratio_penalty_weight = 24.0
+        updated.reward.terminal_intercell_power_penalty_weight = 12.5
+        updated.reward.terminal_total_power_over_greedy_penalty_weight = 5.2
+        updated.reward.terminal_embb_power_over_greedy_penalty_weight = 3.6
+
+        # Raise high-load service/min-rate floors to protect eMBB quality at load 21/24.
+        updated.reward.terminal_embb_service_floor_by_load = {
+            9.0: 0.24,
+            12.0: 0.24,
+            15.0: 0.23,
+            18.0: 0.25,
+            21.0: 0.27,
+            24.0: 0.29,
+        }
+        updated.reward.terminal_embb_min_rate_floor_by_load = {
+            9.0: 0.18,
+            12.0: 0.18,
+            15.0: 0.18,
+            18.0: 0.20,
+            21.0: 0.23,
+            24.0: 0.25,
+        }
+
+        # Add explicit high-load throughput floor versus greedy baseline.
+        updated.training.selection_throughput_ratio_floor_by_load = {
+            9.0: 0.94,
+            12.0: 0.94,
+            15.0: 0.94,
+            18.0: 0.95,
+            21.0: 0.97,
+            24.0: 0.98,
         }
         return updated
 
@@ -3917,6 +4124,723 @@ def apply_experiment_preset(cfg: SRMAPPOConfig, line: str | None) -> SRMAPPOConf
         updated.action.embb_power_delta_limit = 0.60            # Increased from default for larger power adjustments
         updated.training.total_iterations = 1500                # Extended training for convergence
         
+        return updated
+
+    if normalized == EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_V1:
+        # First-round learning-viability preset on the best scene setting found so far.
+        # Keep the no-greedy pure PPO setup, but switch the fixed eMBB baseline to
+        # global sum-rate only and narrow train/eval loads toward the hard-but-learnable regime.
+        updated = apply_experiment_preset(updated, EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_V1)
+        updated.training.experiment_line = normalized
+        updated.training.run_name = "sr_mappo_pure_ppo_ff_v1_no_greedy_obs_planning_multiobj_globaltp_v1"
+
+        updated.env.fixed_embb_baseline_policy = "global_sumrate_only"
+        updated.training.total_iterations = 600
+        updated.training.use_load_curriculum = True
+        updated.training.curriculum_loads = [12.0, 15.0]
+        updated.training.eval_loads = [12.0, 15.0, 18.0]
+        updated.training.coarse_eval_loads = [12.0, 15.0, 18.0]
+        updated.training.dense_eval_loads = [12.0, 15.0, 18.0]
+        updated.training.checkpoint_eval_loads = [12.0, 15.0, 18.0]
+        updated.training.checkpoint_eval_episodes_per_load = 3
+        updated.training.primary_checkpoint_preference = "best_balanced"
+        updated.training.report_fast_debug = True
+        return updated
+
+    if normalized == EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_QUICKCHECK_V1:
+        # Quick first-pass viability preset:
+        # keep the same scene/baseline assumptions as the globaltp preset,
+        # but drastically reduce evaluation breadth so we can tell whether
+        # MAPPO is learning before paying the full research-eval cost.
+        updated = apply_experiment_preset(updated, EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_V1)
+        updated.training.experiment_line = normalized
+        updated.training.run_name = "sr_mappo_pure_ppo_ff_v1_no_greedy_obs_planning_multiobj_globaltp_quickcheck_v1"
+
+        updated.env.fixed_embb_baseline_policy = "global_sumrate_only"
+        updated.training.total_iterations = 200
+        updated.training.use_load_curriculum = True
+        updated.training.curriculum_loads = [12.0, 15.0]
+        updated.training.eval_loads = [12.0, 15.0, 18.0]
+        updated.training.coarse_eval_loads = [12.0, 15.0, 18.0]
+        updated.training.dense_eval_loads = [12.0, 15.0, 18.0]
+        updated.training.eval_every = 100
+        updated.training.checkpoint_every = 100
+        updated.training.light_eval_every = 100
+        updated.training.full_eval_every = 0
+        updated.training.eval_episodes_per_load = 1
+        updated.training.light_eval_episodes_per_load = 1
+        updated.training.checkpoint_eval_scope = "all_loads"
+        updated.training.checkpoint_eval_loads = [12.0, 15.0, 18.0]
+        updated.training.checkpoint_eval_episodes_per_load = 1
+        updated.training.eval_compare_modes = ["selected"]
+        updated.training.primary_checkpoint_preference = "best_balanced"
+        updated.training.report_fast_debug = True
+        return updated
+
+    if normalized == EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V1:
+        # Second quick-check preset:
+        # keep the best current scene/baseline assumptions and the lightweight
+        # eval cadence, but bias learning/checkpoint selection toward URLLC
+        # admission recovery and away from wasteful power-heavy throughput chasing.
+        updated = apply_experiment_preset(updated, EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_QUICKCHECK_V1)
+        updated.training.experiment_line = normalized
+        updated.training.run_name = "sr_mappo_pure_ppo_ff_v1_no_greedy_obs_planning_multiobj_globaltp_adm_quickcheck_v1"
+
+        # Soften the planning-phase throughput pull; keep some service/min-rate
+        # pressure so the policy does not recover admission by destroying eMBB.
+        updated.reward.planning_embb_rate_weight = 0.35
+        updated.reward.planning_embb_service_weight = 0.90
+        updated.reward.planning_embb_min_rate_weight = 0.60
+
+        # Stronger admission-facing terminal signal.
+        updated.reward.terminal_urllc_admission_weight = 6.00
+        updated.reward.terminal_urllc_admission_target = 0.78
+        updated.reward.terminal_urllc_admission_penalty = 16.00
+        updated.reward.terminal_admission_floor_soft_penalty_floor_by_load = {
+            12.0: 0.72,
+            15.0: 0.68,
+            18.0: 0.62,
+        }
+        updated.reward.terminal_admission_floor_soft_penalty_weight_by_load = {
+            12.0: 2.0,
+            15.0: 1.5,
+            18.0: 1.0,
+        }
+
+        # Discourage power-hungry checkpoints and obvious phase-A saturation.
+        updated.reward.terminal_power_saturation_penalty_weight = 0.25
+        updated.reward.terminal_phase_a_cap_hit_penalty_weight = 0.35
+        updated.training.balanced_checkpoint_throughput_weight = 0.35
+        updated.training.balanced_checkpoint_admission_weight = 0.55
+        updated.training.balanced_checkpoint_power_penalty_weight = 0.10
+
+        # Reject checkpoints that still trail the selected greedy baseline too far
+        # on admission, while allowing some gap in this hard regime.
+        updated.training.selection_admission_floor_ratio_to_baseline = 0.85
+
+        return updated
+
+    if normalized == EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V2:
+        # Third quick-check preset:
+        # keep the admission recovery push from v1, but restore enough
+        # throughput pressure to avoid the low-load collapse / over-puncturing
+        # behavior seen in the first admission-heavy run.
+        updated = apply_experiment_preset(updated, EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V1)
+        updated.training.experiment_line = normalized
+        updated.training.run_name = "sr_mappo_pure_ppo_ff_v1_no_greedy_obs_planning_multiobj_globaltp_adm_quickcheck_v2"
+
+        # Pull the planning objective back toward eMBB throughput without
+        # returning all the way to the original throughput-first preset.
+        updated.reward.planning_embb_rate_weight = 0.60
+        updated.reward.planning_embb_service_weight = 1.00
+        updated.reward.planning_embb_min_rate_weight = 0.70
+
+        # Keep admission pressure, but soften it so load-12 does not collapse.
+        updated.reward.terminal_urllc_admission_weight = 5.20
+        updated.reward.terminal_urllc_admission_penalty = 14.00
+        updated.reward.terminal_admission_floor_soft_penalty_floor_by_load = {
+            12.0: 0.66,
+            15.0: 0.70,
+            18.0: 0.64,
+        }
+        updated.reward.terminal_admission_floor_soft_penalty_weight_by_load = {
+            12.0: 1.0,
+            15.0: 1.4,
+            18.0: 1.1,
+        }
+
+        # Rebalance checkpoint preference toward the middle.
+        updated.training.balanced_checkpoint_throughput_weight = 0.50
+        updated.training.balanced_checkpoint_admission_weight = 0.40
+        updated.training.balanced_checkpoint_power_penalty_weight = 0.10
+
+        # Use a softer global floor and stricter load-wise floors on the harder loads.
+        updated.training.selection_admission_floor_ratio_to_baseline = 0.0
+        updated.training.selection_admission_floor_by_load = {
+            12.0: 0.62,
+            15.0: 0.72,
+            18.0: 0.68,
+        }
+
+        return updated
+
+    if normalized == EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V3:
+        # Fourth quick-check preset:
+        # keep the v2 reward shape, but stop trusting throughput-heavy balanced
+        # checkpoints. Prefer service+power+interference-aware checkpoints that
+        # also satisfy explicit per-load admission/power constraints versus the
+        # selected greedy baseline.
+        updated = apply_experiment_preset(updated, EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V2)
+        updated.training.experiment_line = normalized
+        updated.training.run_name = "sr_mappo_pure_ppo_ff_v1_no_greedy_obs_planning_multiobj_globaltp_adm_quickcheck_v3"
+
+        # Choose checkpoints with stronger relative-service / relative-power discipline.
+        updated.training.primary_checkpoint_preference = "best_service_power_interference_balanced"
+
+        # Keep explicit load-wise admission floors relative to the hard regime.
+        updated.training.selection_admission_floor_by_load = {
+            12.0: 0.60,
+            15.0: 0.72,
+            18.0: 0.68,
+        }
+
+        # Prevent "looks good in policy-only eval but far too power-hungry" checkpoints.
+        updated.training.selection_power_ratio_ceiling_by_load = {
+            12.0: 1.15,
+            15.0: 1.12,
+            18.0: 1.12,
+        }
+
+        # Guard against checkpoints that preserve admission but destroy eMBB service/min-rate.
+        updated.training.selection_service_ratio_floor_by_load = {
+            12.0: 0.92,
+            15.0: 0.90,
+            18.0: 0.88,
+        }
+        updated.training.selection_minrate_ratio_floor_by_load = {
+            12.0: 0.90,
+            15.0: 0.88,
+            18.0: 0.85,
+        }
+
+        # The primary checkpoint is no longer driven by `best_balanced`, but keep
+        # these consistent for metadata/report summaries.
+        updated.training.balanced_checkpoint_throughput_weight = 0.45
+        updated.training.balanced_checkpoint_admission_weight = 0.45
+        updated.training.balanced_checkpoint_power_penalty_weight = 0.10
+
+        return updated
+
+    if normalized == EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V4_NO_PHASE0_REWRITE_DEBUG:
+        # Debug preset:
+        # keep quickcheck-v3's reward/selection geometry, but remove Phase-0
+        # snapshot-style execution rewrites so we can measure whether the policy's
+        # owner decisions are intrinsically useful before finalize clamps them back.
+        updated = apply_experiment_preset(
+            updated,
+            EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V3,
+        )
+        updated.training.experiment_line = normalized
+        updated.training.run_name = (
+            "sr_mappo_pure_ppo_ff_v1_no_greedy_obs_planning_multiobj_globaltp_adm_quickcheck_v4_no_phase0_rewrite_debug"
+        )
+
+        # Do not auto-restore invalid/guarded Phase-0 owner moves to snapshot. We
+        # still keep hard feasibility elsewhere and let reward/selection judge
+        # whether the freer owner map is actually better.
+        updated.env.phase0_owner_rewrite_to_snapshot_on_violation = False
+        updated.env.owner_snapshot_used_for_fallback = False
+        updated.env.phase0_owner_guard_violation_fallback = "best_valid"
+
+        return updated
+
+    if normalized == EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V5_NO_FINALIZE_SNAPSHOT_REWRITE_DEBUG:
+        # Stronger debug preset:
+        # build on v4 and additionally disable snapshot-derived finalize-time
+        # min-rate locks / restore-to-snapshot fallbacks inside Phase-0
+        # baseline finalization. This isolates whether the final owner map is
+        # being clamped back to snapshot after the policy has already proposed a
+        # meaningfully different map.
+        updated = apply_experiment_preset(
+            updated,
+            EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V4_NO_PHASE0_REWRITE_DEBUG,
+        )
+        updated.training.experiment_line = normalized
+        updated.training.run_name = (
+            "sr_mappo_pure_ppo_ff_v1_no_greedy_obs_planning_multiobj_globaltp_adm_quickcheck_v5_no_finalize_snapshot_rewrite_debug"
+        )
+        updated.env.phase0_finalize_apply_snapshot_minrate_lock = False
+        updated.env.phase0_finalize_restore_snapshot_on_minrate_count_regression = False
+        updated.env.phase0_finalize_restore_snapshot_on_minrate_infeasible = False
+
+        return updated
+
+    if normalized == EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V6_OWNER_QUALITY_DEBUG:
+        # Owner-quality debug preset:
+        # the action path is now considered learnable enough, so focus on making
+        # Phase-0 owner changes receive a much cleaner positive/negative signal.
+        # Build on v5 so the run stays free of snapshot-style finalize rewrites.
+        updated = apply_experiment_preset(
+            updated,
+            EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V5_NO_FINALIZE_SNAPSHOT_REWRITE_DEBUG,
+        )
+        updated.training.experiment_line = normalized
+        updated.training.run_name = (
+            "sr_mappo_pure_ppo_ff_v1_no_greedy_obs_planning_multiobj_globaltp_adm_quickcheck_v6_owner_quality_debug"
+        )
+
+        # Strengthen direct planning-time eMBB quality incentives so owner moves
+        # that improve served coverage / min-rate are rewarded before the final
+        # aggregate objective dominates.
+        updated.reward.planning_embb_rate_weight = 0.50
+        updated.reward.planning_embb_service_weight = 1.35
+        updated.reward.planning_embb_min_rate_weight = 1.00
+        updated.reward.planning_embb_fairness_weight = 0.40
+        updated.reward.planning_cell_edge_weight = 0.20
+
+        # Reward only high-quality owner moves; punish service-harming or
+        # throughput-harming changes much more aggressively.
+        updated.reward.owner_positive_service_gain_bonus_weight = 2.0
+        updated.reward.owner_positive_rate_gain_bonus_weight = 0.8
+        updated.reward.owner_negative_service_gain_penalty_weight = 6.0
+        updated.reward.owner_negative_rate_gain_penalty_weight = 3.0
+        updated.reward.owner_harmful_change_penalty_weight = 0.30
+        updated.reward.owner_positive_objective_gain_bonus_weight = 0.25
+        updated.reward.owner_negative_objective_gain_penalty_weight = 0.20
+
+        # Compare final service quality explicitly against greedy so "admission up
+        # but service collapses" is no longer an acceptable endpoint.
+        updated.reward.use_greedy_terminal_reference = True
+        updated.reward.terminal_embb_service_gain_vs_greedy_weight = 5.0
+        updated.reward.terminal_embb_minrate_gain_vs_greedy_weight = 3.0
+        updated.reward.terminal_embb_service_vs_greedy_shortfall_penalty_weight = 6.0
+
+        # Keep admission pressure, but slightly reduce the scalar reward so the
+        # owner-quality penalties can actually compete when the policy makes
+        # destructive reallocations.
+        updated.reward.terminal_urllc_admission_weight = 4.8
+        updated.reward.terminal_urllc_admission_penalty = 13.0
+
+        # Make report/checkpoint selection prefer owner-quality-aware models, not
+        # just those that happen to hit admission at the expense of service.
+        updated.training.primary_checkpoint_preference = "best_service_power_interference_balanced"
+        updated.training.balanced_checkpoint_throughput_weight = 0.40
+        updated.training.balanced_checkpoint_admission_weight = 0.35
+        updated.training.balanced_checkpoint_power_penalty_weight = 0.25
+
+        return updated
+
+    if normalized == EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V7_SMALL_EDIT_CONSTRAINED_RL:
+        # Small-edit constrained RL preset:
+        # keep the owner-action path open, but stop Phase-0 from rewriting most
+        # of the map at once. The goal is to first learn "few edits, low harm"
+        # before allowing larger deviations from the snapshot baseline.
+        updated = apply_experiment_preset(
+            updated,
+            EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V5_NO_FINALIZE_SNAPSHOT_REWRITE_DEBUG,
+        )
+        updated.training.experiment_line = normalized
+        updated.training.run_name = (
+            "sr_mappo_pure_ppo_ff_v1_no_greedy_obs_planning_multiobj_globaltp_adm_quickcheck_v7_small_edit_constrained_rl"
+        )
+        updated.training.total_iterations = 600
+
+        # Keep the learning problem narrow: owner edits only, no Phase-0 or
+        # Phase-A power residuals while we verify whether small owner changes can
+        # become non-harmful.
+        updated.env.learn_phase0_embb_power = False
+        updated.env.allow_phase_a_embb_power_adjustment = False
+        updated.action.embb_power_delta_limit = 0.0
+
+        # Aggressively cap owner churn and ramp it up slowly.
+        updated.env.phase0_owner_change_budget_mode = "committed_only"
+        updated.env.phase0_owner_max_change_ratio = 0.08
+        updated.env.phase0_owner_change_warmup_enabled = True
+        updated.env.phase0_owner_change_ratio_start = 0.02
+        updated.env.phase0_owner_change_ratio_end = 0.08
+        updated.env.phase0_owner_change_warmup_iters = 1200
+
+        # Use guardrails that favor "do nothing" over destructive moves while the
+        # policy is still learning the local owner-quality geometry.
+        updated.env.phase0_owner_guard_enabled = True
+        updated.env.phase0_owner_service_gain_guard = True
+        updated.env.phase0_owner_rate_gain_guard = True
+        updated.env.owner_max_negative_accept_ratio = 0.0
+        updated.env.owner_service_drop_tol = 0.0
+        updated.env.owner_intercell_increase_tol = 0.0
+
+        # Remove incentives for gratuitous edits; reward only safe, effective
+        # changes and punish churn / unserved consequences strongly.
+        updated.reward.owner_change_bonus_weight = 0.0
+        updated.reward.owner_change_underuse_penalty_weight = 0.0
+        updated.reward.owner_change_utilization_bonus_weight = 0.0
+        updated.reward.owner_same_as_snapshot_penalty_weight = 0.0
+        updated.reward.owner_positive_service_gain_bonus_weight = 1.0
+        updated.reward.owner_positive_rate_gain_bonus_weight = 0.5
+        updated.reward.owner_negative_service_gain_penalty_weight = 8.0
+        updated.reward.owner_negative_rate_gain_penalty_weight = 4.0
+        updated.reward.owner_harmful_change_penalty_weight = 0.60
+        updated.reward.owner_changed_but_no_service_penalty_weight = 0.60
+        updated.reward.owner_dropped_raw_churn_penalty_weight = 0.15
+        updated.reward.owner_positive_objective_gain_bonus_weight = 0.15
+        updated.reward.owner_negative_objective_gain_penalty_weight = 0.35
+
+        # Avoid the currently suspect greedy terminal reference path in this line;
+        # use direct service/rate objectives and checkpoint on balanced outcomes.
+        updated.reward.use_greedy_terminal_reference = False
+        updated.reward.terminal_embb_service_gain_vs_greedy_weight = 0.0
+        updated.reward.terminal_embb_minrate_gain_vs_greedy_weight = 0.0
+        updated.reward.terminal_embb_service_vs_greedy_shortfall_penalty_weight = 0.0
+        updated.reward.terminal_urllc_admission_weight = 4.5
+        updated.reward.terminal_urllc_admission_penalty = 12.0
+        updated.training.primary_checkpoint_preference = "best_service_power_interference_balanced"
+        updated.training.balanced_checkpoint_throughput_weight = 0.35
+        updated.training.balanced_checkpoint_admission_weight = 0.35
+        updated.training.balanced_checkpoint_power_penalty_weight = 0.30
+
+        return updated
+
+    if normalized == EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V8_SMALL_EDIT_UNLOCK:
+        # Unlock preset:
+        # build on v7, but allow a small amount of owner deviation to actually
+        # survive guard/budget so the policy has a chance to separate from the
+        # snapshot baseline instead of being clamped back to zero executed edits.
+        updated = apply_experiment_preset(
+            updated,
+            EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V7_SMALL_EDIT_CONSTRAINED_RL,
+        )
+        updated.training.experiment_line = normalized
+        updated.training.run_name = (
+            "sr_mappo_pure_ppo_ff_v1_no_greedy_obs_planning_multiobj_globaltp_adm_quickcheck_v8_small_edit_unlock"
+        )
+        updated.training.total_iterations = 600
+
+        # Still keep the problem owner-only, but allow slightly larger edits and
+        # a shorter warmup so non-trivial changes can survive by mid-training.
+        updated.env.phase0_owner_max_change_ratio = 0.12
+        updated.env.phase0_owner_change_ratio_start = 0.03
+        updated.env.phase0_owner_change_ratio_end = 0.12
+        updated.env.phase0_owner_change_warmup_iters = 600
+
+        # Relax the hard zero-negative policy just enough to permit near-neutral
+        # changes when they unlock admission gains.
+        updated.env.owner_max_negative_accept_ratio = 0.05
+        updated.env.owner_service_drop_tol = 0.005
+        updated.env.owner_intercell_increase_tol = 0.01
+
+        # Pay for effective edits so the actor prefers a few accepted changes
+        # over many raw proposals that get dropped.
+        updated.reward.owner_effective_change_bonus_weight = 0.60
+        updated.reward.owner_positive_service_gain_bonus_weight = 1.4
+        updated.reward.owner_positive_rate_gain_bonus_weight = 0.7
+        updated.reward.owner_negative_service_gain_penalty_weight = 6.5
+        updated.reward.owner_negative_rate_gain_penalty_weight = 3.0
+        updated.reward.owner_harmful_change_penalty_weight = 0.45
+        updated.reward.owner_changed_but_no_service_penalty_weight = 0.40
+        updated.reward.owner_dropped_raw_churn_penalty_weight = 0.08
+        updated.reward.owner_positive_objective_gain_bonus_weight = 0.25
+        updated.reward.owner_negative_objective_gain_penalty_weight = 0.25
+
+        return updated
+
+    if normalized == EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V9_ADMISSION_PUNCTURE_PUSH:
+        # Admission-biased follow-up to v8:
+        # keep the same owner-only small-edit learning structure, but explicitly
+        # push the policy to convert its existing power headroom into stronger
+        # admission via soft admission floors and safe-puncture preferences.
+        updated = apply_experiment_preset(
+            updated,
+            EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V8_SMALL_EDIT_UNLOCK,
+        )
+        updated.training.experiment_line = normalized
+        updated.training.run_name = (
+            "sr_mappo_pure_ppo_ff_v1_no_greedy_obs_planning_multiobj_globaltp_adm_quickcheck_v9_admission_puncture_push"
+        )
+        updated.training.total_iterations = 700
+
+        # Hold a modest URLLC admission floor across loads while still allowing
+        # high-load degradation when the scene becomes genuinely hard.
+        updated.reward.terminal_admission_floor_soft_penalty_weight = 5.0
+        updated.reward.terminal_admission_floor_soft_penalty_floor_by_load = {
+            9.0: 0.76,
+            12.0: 0.71,
+            15.0: 0.71,
+            18.0: 0.67,
+            21.0: 0.69,
+            24.0: 0.62,
+        }
+
+        # Teach the policy to prefer low-damage puncture when it is available,
+        # instead of drifting toward near-greedy frontier choices by default.
+        updated.reward.safe_puncture_bonus_weight = 0.35
+        updated.reward.safe_puncture_preference_penalty_weight = 0.20
+        updated.reward.overlay_when_safe_puncture_penalty_weight = 0.15
+        updated.reward.overlay_when_lower_intercell_puncture_available_penalty_weight = 0.12
+        updated.reward.missed_feasible_puncture_penalty_weight = 0.25
+        updated.reward.puncture_admission_bonus_weight = 0.20
+        updated.reward.safe_admission_bonus_weight = 0.20
+
+        # Keep eMBB from collapsing while admission is pushed harder.
+        updated.reward.terminal_embb_service_floor = 0.68
+        updated.reward.terminal_embb_service_floor_penalty_weight = 1.8
+        updated.reward.terminal_embb_service_floor_by_load = {
+            9.0: 0.96,
+            12.0: 0.96,
+            15.0: 0.92,
+            18.0: 0.86,
+            21.0: 0.80,
+            24.0: 0.68,
+        }
+        updated.reward.terminal_embb_min_rate_floor = 0.42
+        updated.reward.terminal_embb_min_rate_floor_penalty_weight = 1.4
+        updated.reward.terminal_embb_min_rate_floor_by_load = {
+            9.0: 0.75,
+            12.0: 0.63,
+            15.0: 0.57,
+            18.0: 0.50,
+            21.0: 0.45,
+            24.0: 0.40,
+        }
+
+        # Do not anchor directly to greedy yet; first see whether admission
+        # shaping alone can widen the gap while preserving the cleaner pairing.
+        updated.reward.use_greedy_terminal_reference = False
+        updated.reward.terminal_embb_service_gain_vs_greedy_weight = 0.0
+        updated.reward.terminal_embb_minrate_gain_vs_greedy_weight = 0.0
+        updated.reward.terminal_embb_service_vs_greedy_shortfall_penalty_weight = 0.0
+
+        updated.training.primary_checkpoint_preference = "best_service_power_interference_balanced"
+        updated.training.balanced_checkpoint_throughput_weight = 0.30
+        updated.training.balanced_checkpoint_admission_weight = 0.45
+        updated.training.balanced_checkpoint_power_penalty_weight = 0.25
+
+        return updated
+
+    if normalized == EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V10_OWNER_PHASEA_POWER:
+        # v10:
+        # keep v9's admission / safe-puncture shaping, but add a conservative
+        # Phase-A eMBB power head so MAPPO has one extra degree of freedom to
+        # separate from greedy without abandoning the small-edit owner backbone.
+        updated = apply_experiment_preset(
+            updated,
+            EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V9_ADMISSION_PUNCTURE_PUSH,
+        )
+        updated.training.experiment_line = normalized
+        updated.training.run_name = (
+            "sr_mappo_pure_ppo_ff_v1_no_greedy_obs_planning_multiobj_globaltp_adm_quickcheck_v10_owner_phasea_power"
+        )
+        updated.training.total_iterations = 800
+        updated.training.phase_a_embb_power_start_iteration = 180
+
+        # Preserve owner-only Phase-0, but let Phase-A adjust eMBB power with a
+        # narrow delta budget to avoid blowing up the learned operating point.
+        updated.env.learn_phase0_embb_power = False
+        updated.env.allow_phase_a_embb_power_adjustment = True
+        updated.env.allow_phase_a_power_on_keep = False
+        updated.action.embb_power_delta_limit = 0.06
+
+        # Mild regularization: prefer sparse, smooth power edits and avoid
+        # saturating the power head into a second uncontrolled optimizer.
+        updated.reward.phase_a_power_change_penalty_weight = 0.04
+        updated.reward.phase_a_power_smooth_delta_penalty_weight = 0.04
+        updated.reward.phase_a_power_delta_l2_penalty_weight = 0.08
+        updated.reward.phase_a_power_raw_saturation_penalty_weight = 0.12
+        updated.reward.phase_a_power_cap_hit_penalty_weight = 0.12
+        updated.reward.phase_a_power_target_write_ratio = 0.04
+        updated.reward.phase_a_power_write_ratio_penalty_weight = 0.08
+        updated.reward.phase_a_power_diversity_bonus_weight = 0.03
+        updated.reward.phase_a_power_saturation_threshold = 0.90
+
+        # Keep checkpoint selection slightly admission-biased, but acknowledge
+        # the new power head by weighting power a bit more than in v9.
+        updated.training.primary_checkpoint_preference = "best_service_power_interference_balanced"
+        updated.training.balanced_checkpoint_throughput_weight = 0.28
+        updated.training.balanced_checkpoint_admission_weight = 0.42
+        updated.training.balanced_checkpoint_power_penalty_weight = 0.30
+
+        return updated
+
+    if normalized == EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V11_PHASEA_POWER_EFFECTIVE:
+        # v11:
+        # keep the v10 owner + Phase-A power structure, but relax the runtime
+        # gates enough that the power head can actually produce non-zero edits.
+        updated = apply_experiment_preset(
+            updated,
+            EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V10_OWNER_PHASEA_POWER,
+        )
+        updated.training.experiment_line = normalized
+        updated.training.run_name = (
+            "sr_mappo_pure_ppo_ff_v1_no_greedy_obs_planning_multiobj_globaltp_adm_quickcheck_v11_phasea_power_effective"
+        )
+        updated.training.total_iterations = 900
+        updated.training.phase_a_embb_power_start_iteration = 120
+
+        # Phase-0 remains owner-only. The point of v11 is to make the Phase-A
+        # power head meaningfully active rather than nominally enabled.
+        updated.env.learn_phase0_embb_power = False
+        updated.env.allow_phase_a_embb_power_adjustment = True
+        updated.env.allow_phase_a_power_on_keep = True
+
+        # Give the repair head enough room to move while staying conservative.
+        updated.action.embb_power_delta_limit = 0.12
+        updated.env.phase_a_embb_power_max_downscale_per_step = 0.12
+        updated.env.phase_a_positive_boost_cap = 0.04
+        updated.env.phase_a_power_guard_floor_margin = 0.01
+        updated.env.phase_a_embb_power_scale_bound_relax = 1.35
+        updated.env.phase_a_embb_power_scale_floor_relax = 1.50
+        updated.env.phase_a_embb_power_scale_cap_relax = 1.15
+        updated.env.phase_a_negative_only_embb_power_repair = True
+
+        # Ease the anti-movement regularization so the head can escape the
+        # all-zero regime, but still keep it sparse and smooth.
+        updated.reward.phase_a_power_change_penalty_weight = 0.02
+        updated.reward.phase_a_power_smooth_delta_penalty_weight = 0.02
+        updated.reward.phase_a_power_delta_l2_penalty_weight = 0.04
+        updated.reward.phase_a_power_raw_saturation_penalty_weight = 0.08
+        updated.reward.phase_a_power_cap_hit_penalty_weight = 0.08
+        updated.reward.phase_a_power_target_write_ratio = 0.10
+        updated.reward.phase_a_power_write_ratio_penalty_weight = 0.04
+        updated.reward.phase_a_power_diversity_bonus_weight = 0.05
+        updated.reward.phase_a_power_saturation_threshold = 0.95
+
+        updated.training.primary_checkpoint_preference = "best_service_power_interference_balanced"
+        updated.training.balanced_checkpoint_throughput_weight = 0.27
+        updated.training.balanced_checkpoint_admission_weight = 0.41
+        updated.training.balanced_checkpoint_power_penalty_weight = 0.32
+
+        return updated
+
+    if normalized == EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V12_HIGHLOAD_ADMISSION_STABLE:
+        # v12:
+        # keep v11's now-active Phase-A power head, but shift priority toward
+        # protecting admission at medium-high/high loads without fully giving
+        # back the throughput/power gains.
+        updated = apply_experiment_preset(
+            updated,
+            EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V11_PHASEA_POWER_EFFECTIVE,
+        )
+        updated.training.experiment_line = normalized
+        updated.training.run_name = (
+            "sr_mappo_pure_ppo_ff_v1_no_greedy_obs_planning_multiobj_globaltp_adm_quickcheck_v12_highload_admission_stable"
+        )
+        updated.training.total_iterations = 1000
+
+        # Keep the active Phase-A structure from v11, but avoid making the
+        # power head more aggressive before eval pairing is cleaned up.
+        updated.env.learn_phase0_embb_power = False
+        updated.env.allow_phase_a_embb_power_adjustment = True
+        updated.env.allow_phase_a_power_on_keep = True
+        updated.action.embb_power_delta_limit = 0.12
+        updated.env.phase_a_embb_power_max_downscale_per_step = 0.12
+        updated.env.phase_a_positive_boost_cap = 0.035
+        updated.env.phase_a_power_guard_floor_margin = 0.008
+        updated.env.phase_a_embb_power_scale_bound_relax = 1.30
+        updated.env.phase_a_embb_power_scale_floor_relax = 1.45
+        updated.env.phase_a_embb_power_scale_cap_relax = 1.12
+        updated.env.phase_a_negative_only_embb_power_repair = True
+
+        # Nudge the head to keep moving, but slightly tighten write pressure so
+        # it does not spend admission budget on too many weak edits.
+        updated.reward.phase_a_power_change_penalty_weight = 0.02
+        updated.reward.phase_a_power_smooth_delta_penalty_weight = 0.025
+        updated.reward.phase_a_power_delta_l2_penalty_weight = 0.05
+        updated.reward.phase_a_power_raw_saturation_penalty_weight = 0.08
+        updated.reward.phase_a_power_cap_hit_penalty_weight = 0.08
+        updated.reward.phase_a_power_target_write_ratio = 0.08
+        updated.reward.phase_a_power_write_ratio_penalty_weight = 0.06
+        updated.reward.phase_a_power_diversity_bonus_weight = 0.05
+        updated.reward.phase_a_power_saturation_threshold = 0.95
+
+        # Admission-first correction at medium-high/high loads.
+        updated.reward.terminal_admission_floor_soft_penalty_floor_by_load = {
+            9.0: 0.0,
+            12.0: 0.0,
+            15.0: 0.0,
+            18.0: 0.68,
+            21.0: 0.69,
+            24.0: 0.69,
+        }
+        updated.reward.terminal_admission_floor_soft_penalty_weight_by_load = {
+            9.0: 0.0,
+            12.0: 0.0,
+            15.0: 0.0,
+            18.0: 1.2,
+            21.0: 1.5,
+            24.0: 1.7,
+        }
+        updated.reward.terminal_admission_floor_soft_penalty_weight = max(
+            float(getattr(updated.reward, "terminal_admission_floor_soft_penalty_weight", 0.0) or 0.0),
+            1.0,
+        )
+        updated.reward.urllc_admission_over_service_tradeoff_penalty_weight = 1.25
+        updated.reward.urllc_admission_over_service_service_floor = 0.24
+
+        # Slightly admission-biased checkpoint selection versus v11.
+        updated.training.primary_checkpoint_preference = "best_service_power_interference_balanced"
+        updated.training.balanced_checkpoint_throughput_weight = 0.25
+        updated.training.balanced_checkpoint_admission_weight = 0.46
+        updated.training.balanced_checkpoint_power_penalty_weight = 0.29
+
+        return updated
+
+    if normalized == EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V13_MODE_PUSH:
+        # v13:
+        # keep v12's high-load admission protection, but explicitly push the
+        # mode head away from all-keep behavior with soft load-aware selection
+        # floors and a light frontier-mode anchor.
+        updated = apply_experiment_preset(
+            updated,
+            EXPERIMENT_PURE_PPO_FF_V1_NO_GREEDY_OBS_PLANNING_MULTIOBJ_GLOBALTP_ADM_QUICKCHECK_V12_HIGHLOAD_ADMISSION_STABLE,
+        )
+        updated.training.experiment_line = normalized
+        updated.training.run_name = (
+            "sr_mappo_pure_ppo_ff_v1_no_greedy_obs_planning_multiobj_globaltp_adm_quickcheck_v13_mode_push"
+        )
+        updated.training.total_iterations = 1050
+
+        # Keep the admission-first v12 objective, but make checkpoint selection
+        # care a bit more about policies that actually use coexistence actions.
+        updated.training.balanced_checkpoint_throughput_weight = 0.24
+        updated.training.balanced_checkpoint_admission_weight = 0.48
+        updated.training.balanced_checkpoint_power_penalty_weight = 0.28
+
+        # Load-aware selection floors: at medium/high loads, reject candidates
+        # that collapse too hard into KEEP-only behavior.
+        updated.training.selection_puncture_ratio_floor_by_load = {
+            15.0: 0.42,
+            18.0: 0.50,
+            21.0: 0.56,
+            24.0: 0.60,
+        }
+        updated.training.selection_overlay_ratio_ceiling_by_load = {
+            15.0: 0.48,
+            18.0: 0.42,
+            21.0: 0.36,
+            24.0: 0.32,
+        }
+
+        # Light anchor only: enough to keep coexistence mode usage visible,
+        # without forcing the policy into a brittle puncture-only regime.
+        updated.training.use_frontier_mode_anchor = True
+        updated.training.frontier_mode_anchor_weight = 0.05
+        updated.training.frontier_puncture_floor_by_load = {
+            15.0: 0.42,
+            18.0: 0.50,
+            21.0: 0.56,
+            24.0: 0.60,
+        }
+        updated.training.frontier_overlay_ceiling_by_load = {
+            15.0: 0.48,
+            18.0: 0.42,
+            21.0: 0.36,
+            24.0: 0.32,
+        }
+
+        # Reward-side mode shaping: encourage feasible puncture usage at
+        # medium/high load, but keep the push softer than the older hard-anchor
+        # experiments.
+        updated.reward.load_adaptive_mode_target_weight = 0.08
+        updated.reward.load_adaptive_start_load = 15.0
+        updated.reward.load_adaptive_puncture_floor_by_load = {
+            15.0: 0.42,
+            18.0: 0.50,
+            21.0: 0.56,
+            24.0: 0.60,
+        }
+        updated.reward.load_adaptive_overlay_ceiling_by_load = {
+            15.0: 0.48,
+            18.0: 0.42,
+            21.0: 0.36,
+            24.0: 0.32,
+        }
+        updated.reward.safe_puncture_bonus_weight = 0.42
+        updated.reward.overlay_when_safe_puncture_penalty_weight = 0.18
+        updated.reward.missed_feasible_puncture_penalty_weight = 0.30
+        updated.reward.overlay_when_lower_intercell_puncture_available_penalty_weight = 0.14
+        updated.reward.puncture_admission_bonus_weight = 0.24
+        updated.reward.frontier_mode_bonus_weight = 0.02
+        updated.reward.frontier_mode_penalty_weight = 0.05
+
         return updated
 
     if normalized == EXPERIMENT_ABLATION_PHASE0_FROZEN_GREEDY_PHASE_A_ONLY:

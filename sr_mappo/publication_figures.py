@@ -135,7 +135,7 @@ def _build_ratio_scenario(label: str, embb_share: float, urllc_share: float) -> 
     sys_cfg.num_embb_users = embb_users
     sys_cfg.num_urllc_users = urllc_users
     sys_cfg.refresh_derived_params()
-    urllc_cfg.power_limits = [24] * sys_cfg.num_urllc_users
+    urllc_cfg.power_limits = [26] * sys_cfg.num_urllc_users
     embb_cfg.power_limits = [23] * sys_cfg.num_embb_users
 
     base_lambda_per_urllc = _load_to_lambda(REPRESENTATIVE_LOAD) / max(36.0, 1.0)

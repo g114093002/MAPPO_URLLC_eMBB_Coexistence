@@ -49,7 +49,7 @@ def _eval_log(cfg: SRMAPPOConfig, message: str) -> None:
     print(f"[{timestamp}] [SR-MAPPO][EVAL] {message}", flush=True)
 
 
-def _policy_actions(env, model, observations, actor_hidden, critic_hidden):
+def _policy_actions(env, model, observations, actor_hidden, critic_hidden, deterministic: bool = True):
     local_obs = torch.from_numpy(np.stack([observations[agent_id].local_obs for agent_id in env.agent_ids]).astype(np.float32)).to(model.power_log_std.device)
     global_obs = torch.from_numpy(np.stack([observations[agent_id].global_obs for agent_id in env.agent_ids]).astype(np.float32)).to(model.power_log_std.device)
     mode_mask = torch.from_numpy(np.stack([observations[agent_id].masks.mode_mask for agent_id in env.agent_ids]).astype(np.float32)).to(model.power_log_std.device)
@@ -63,14 +63,14 @@ def _policy_actions(env, model, observations, actor_hidden, critic_hidden):
         embb_owner_mask=embb_owner_mask,
         actor_hidden=actor_hidden,
         critic_hidden=critic_hidden,
-        deterministic=False,
+        deterministic=bool(deterministic),
     )
     joint_actions = {}
     for idx, agent_id in enumerate(env.agent_ids):
         joint_actions[agent_id] = HybridAction(
             mode=int(output.mode[idx].item()),
             packet_option=int(output.packet_option[idx].item()),
-            power_delta=float(output.power_delta[idx].item()),
+            power_delta=0.0,
             embb_owner_option=int(output.embb_owner_option[idx].item()),
             embb_power_delta=float(output.embb_power_delta[idx].item()),
         )
@@ -91,6 +91,54 @@ def _greedy_actions(env, observations):
         ref = observations[agent_id].greedy_reference
         actions[agent_id] = ref if ref is not None else HybridAction()
     return actions
+
+
+def _effective_embb_total_rate(summary: Dict[str, float], default: float = 0.0) -> float:
+    return float(
+        summary.get(
+            "embb_total_rate_after_puncture_deduction",
+            summary.get(
+                "embb_rate_after_local_puncture_deduction",
+                summary.get("embb_total_rate", default),
+            ),
+        )
+    )
+
+
+def _effective_embb_user_rate(summary: Dict[str, float], default: float = 0.0) -> float:
+    return float(
+        summary.get(
+            "embb_user_rate_mean_after_puncture_deduction",
+            summary.get("embb_user_rate_mean", default),
+        )
+    )
+
+
+def _effective_embb_service_ratio(summary: Dict[str, float], default: float = 0.0) -> float:
+    return float(
+        summary.get(
+            "embb_service_ratio_after_puncture_deduction",
+            summary.get("embb_service_ratio", default),
+        )
+    )
+
+
+def _mean_any(items, keys, default=0.0):
+    if not items:
+        return float(default)
+    values = []
+    for item in items:
+        chosen = default
+        for key in keys:
+            if key in item:
+                chosen = item.get(key, default)
+                break
+        values.append(chosen)
+    arr = np.asarray(values, dtype=float)
+    finite = arr[np.isfinite(arr)]
+    if finite.size == 0:
+        return float(default)
+    return float(np.mean(finite))
 
 
 def _channel_only_actions(env, observations):
@@ -800,7 +848,22 @@ def _run_original_greedy_episode(env, seed: int, slot_index: int = 0) -> Dict[st
         "team_reward": 0.0,
         "cell_order_length": 0.0,
         "embb_total_rate": float(metrics["embb_total_rate"]),
+        "embb_total_rate_after_puncture_deduction": float(
+            metrics.get(
+                "embb_total_rate_after_puncture_deduction",
+                metrics.get("embb_rate_after_local_puncture_deduction", metrics["embb_total_rate"]),
+            )
+        ),
         "embb_user_rate_mean": float(metrics.get("embb_user_rate_mean", 0.0)),
+        "embb_user_rate_mean_after_puncture_deduction": float(
+            metrics.get("embb_user_rate_mean_after_puncture_deduction", metrics.get("embb_user_rate_mean", 0.0))
+        ),
+        "embb_service_ratio_after_puncture_deduction": float(
+            metrics.get(
+                "embb_service_ratio_after_puncture_deduction",
+                float(metrics.get("embb_served_users", 0.0) / max(sys_cfg.num_embb_users, 1)),
+            )
+        ),
         "urllc_admission_rate": admission,
         "urllc_success_rate": reliability,
         "admitted_urllc_reliability": reliability,
@@ -852,7 +915,22 @@ def _run_original_greedy_normal_v1_episode(env, seed: int, slot_index: int = 0) 
         "team_reward": 0.0,
         "cell_order_length": 0.0,
         "embb_total_rate": float(metrics["embb_total_rate"]),
+        "embb_total_rate_after_puncture_deduction": float(
+            metrics.get(
+                "embb_total_rate_after_puncture_deduction",
+                metrics.get("embb_rate_after_local_puncture_deduction", metrics["embb_total_rate"]),
+            )
+        ),
         "embb_user_rate_mean": float(metrics.get("embb_user_rate_mean", 0.0)),
+        "embb_user_rate_mean_after_puncture_deduction": float(
+            metrics.get("embb_user_rate_mean_after_puncture_deduction", metrics.get("embb_user_rate_mean", 0.0))
+        ),
+        "embb_service_ratio_after_puncture_deduction": float(
+            metrics.get(
+                "embb_service_ratio_after_puncture_deduction",
+                float(metrics.get("embb_served_users", 0.0) / max(sys_cfg.num_embb_users, 1)),
+            )
+        ),
         "urllc_admission_rate": admission,
         "urllc_success_rate": reliability,
         "admitted_urllc_reliability": reliability,
@@ -904,7 +982,22 @@ def _run_original_greedy_normal_v2_episode(env, seed: int, slot_index: int = 0) 
         "team_reward": 0.0,
         "cell_order_length": 0.0,
         "embb_total_rate": float(metrics["embb_total_rate"]),
+        "embb_total_rate_after_puncture_deduction": float(
+            metrics.get(
+                "embb_total_rate_after_puncture_deduction",
+                metrics.get("embb_rate_after_local_puncture_deduction", metrics["embb_total_rate"]),
+            )
+        ),
         "embb_user_rate_mean": float(metrics.get("embb_user_rate_mean", 0.0)),
+        "embb_user_rate_mean_after_puncture_deduction": float(
+            metrics.get("embb_user_rate_mean_after_puncture_deduction", metrics.get("embb_user_rate_mean", 0.0))
+        ),
+        "embb_service_ratio_after_puncture_deduction": float(
+            metrics.get(
+                "embb_service_ratio_after_puncture_deduction",
+                float(metrics.get("embb_served_users", 0.0) / max(sys_cfg.num_embb_users, 1)),
+            )
+        ),
         "urllc_admission_rate": admission,
         "urllc_success_rate": reliability,
         "admitted_urllc_reliability": reliability,
@@ -959,6 +1052,7 @@ def rollout_episode(
     seed: int = 42,
     use_greedy: bool = False,
     greedy_policy: str = "reference",
+    deterministic_policy: bool = True,
 ) -> Dict[str, float]:
     episode_start = perf_counter()
     previous_greedy_obs = bool(getattr(env.rl_cfg.env, "include_greedy_reference_in_obs", False))
@@ -1076,7 +1170,14 @@ def rollout_episode(
                                 float(debug.get("current_env_requires_feasible_admission_only", 0.0)),
                             )
             else:
-                joint_actions, actor_hidden, critic_hidden = _policy_actions(env, model, observations, actor_hidden, critic_hidden)
+                joint_actions, actor_hidden, critic_hidden = _policy_actions(
+                    env,
+                    model,
+                    observations,
+                    actor_hidden,
+                    critic_hidden,
+                    deterministic=deterministic_policy,
+                )
 
             # Shield/autonomy diagnostics: compare raw actions vs executed (masked+shielded) actions.
             planning_phase = all(
@@ -1356,9 +1457,18 @@ def evaluate_policy_only(env, model, cfg) -> Dict[str, float]:
             'policy_mean_puncture': _mean(policy_metrics, 'puncture_count'),
             'policy_mean_overlay_ratio': _mean(policy_metrics, 'overlay_ratio'),
             'policy_mean_puncture_ratio': _mean(policy_metrics, 'puncture_ratio'),
-            'policy_mean_embb_rate': _mean(policy_metrics, 'embb_total_rate'),
-            'policy_mean_embb_user_rate': _mean(policy_metrics, 'embb_user_rate_mean'),
-            'policy_mean_embb_service_ratio': _mean(policy_metrics, 'embb_service_ratio'),
+            'policy_mean_embb_rate': _mean_any(
+                policy_metrics,
+                ('embb_total_rate_after_puncture_deduction', 'embb_rate_after_local_puncture_deduction', 'embb_total_rate'),
+            ),
+            'policy_mean_embb_user_rate': _mean_any(
+                policy_metrics,
+                ('embb_user_rate_mean_after_puncture_deduction', 'embb_user_rate_mean'),
+            ),
+            'policy_mean_embb_service_ratio': _mean_any(
+                policy_metrics,
+                ('embb_service_ratio_after_puncture_deduction', 'embb_service_ratio'),
+            ),
             'policy_mean_embb_min_rate_satisfaction_ratio': _mean(policy_metrics, 'embb_min_rate_satisfaction_ratio'),
             'policy_mean_embb_served_user_count': _mean(policy_metrics, 'embb_served_user_count'),
             # Kept for backward compatibility: equals `policy_mean_embb_service_ratio`.
@@ -1831,8 +1941,14 @@ def _evaluate_one_load(env, model, cfg, target_load: float, seed_base: int) -> D
         else:
             raise RuntimeError("Frozen greedy metrics should be handled outside _evaluate_one_load().")
 
-    policy_embb = _mean(policy_metrics, 'embb_total_rate')
-    greedy_embb = _mean(greedy_metrics, 'embb_total_rate')
+    policy_embb = _mean_any(
+        policy_metrics,
+        ('embb_total_rate_after_puncture_deduction', 'embb_rate_after_local_puncture_deduction', 'embb_total_rate'),
+    )
+    greedy_embb = _mean_any(
+        greedy_metrics,
+        ('embb_total_rate_after_puncture_deduction', 'embb_rate_after_local_puncture_deduction', 'embb_total_rate'),
+    )
     policy_adm = _mean(policy_metrics, 'scheduled_ratio', 1.0)
     greedy_adm = _mean(greedy_metrics, 'scheduled_ratio', 1.0)
     policy_reliability = _mean(policy_metrics, 'admitted_urllc_reliability', np.nan)
@@ -1882,7 +1998,10 @@ def _evaluate_one_load(env, model, cfg, target_load: float, seed_base: int) -> D
         policy_adm,
         policy_effective_success,
         rate_ratio,
-        (_mean(policy_metrics, 'embb_service_ratio') / max(_mean(greedy_metrics, 'embb_service_ratio'), 1.0e-9)),
+        (
+            _mean_any(policy_metrics, ('embb_service_ratio_after_puncture_deduction', 'embb_service_ratio'))
+            / max(_mean_any(greedy_metrics, ('embb_service_ratio_after_puncture_deduction', 'embb_service_ratio')), 1.0e-9)
+        ),
         (
             _mean(policy_metrics, 'embb_min_rate_satisfaction_ratio')
             / max(_mean(greedy_metrics, 'embb_min_rate_satisfaction_ratio'), 1.0e-9)
@@ -1912,12 +2031,15 @@ def _evaluate_one_load(env, model, cfg, target_load: float, seed_base: int) -> D
         'policy_mean_overlay': policy_overlay,
         'policy_mean_puncture': policy_puncture,
         'policy_mean_embb_rate': policy_embb,
-        'policy_mean_embb_service_ratio': _mean(policy_metrics, 'embb_service_ratio'),
+        'policy_mean_embb_service_ratio': _mean_any(
+            policy_metrics,
+            ('embb_service_ratio_after_puncture_deduction', 'embb_service_ratio'),
+        ),
         'policy_mean_embb_min_rate_satisfaction_ratio': _mean(policy_metrics, 'embb_min_rate_satisfaction_ratio'),
         'policy_mean_embb_service_ratio_after_puncture_deduction': _mean(
             policy_metrics,
             'embb_service_ratio_after_puncture_deduction',
-            _mean(policy_metrics, 'embb_service_ratio', 0.0),
+            _mean_any(policy_metrics, ('embb_service_ratio_after_puncture_deduction', 'embb_service_ratio'), 0.0),
         ),
         'policy_mean_embb_min_rate_satisfaction_after_puncture_deduction': _mean(
             policy_metrics,
@@ -1952,12 +2074,15 @@ def _evaluate_one_load(env, model, cfg, target_load: float, seed_base: int) -> D
         'greedy_mean_overlay': greedy_overlay,
         'greedy_mean_puncture': _mean(greedy_metrics, 'puncture_count'),
         'greedy_mean_embb_rate': greedy_embb,
-        'greedy_mean_embb_service_ratio': _mean(greedy_metrics, 'embb_service_ratio'),
+        'greedy_mean_embb_service_ratio': _mean_any(
+            greedy_metrics,
+            ('embb_service_ratio_after_puncture_deduction', 'embb_service_ratio'),
+        ),
         'greedy_mean_embb_min_rate_satisfaction_ratio': _mean(greedy_metrics, 'embb_min_rate_satisfaction_ratio'),
         'greedy_mean_embb_service_ratio_after_puncture_deduction': _mean(
             greedy_metrics,
             'embb_service_ratio_after_puncture_deduction',
-            _mean(greedy_metrics, 'embb_service_ratio', 0.0),
+            _mean_any(greedy_metrics, ('embb_service_ratio_after_puncture_deduction', 'embb_service_ratio'), 0.0),
         ),
         'greedy_mean_embb_min_rate_satisfaction_after_puncture_deduction': _mean(
             greedy_metrics,
@@ -2055,7 +2180,10 @@ def evaluate_against_greedy(env, model, cfg) -> Dict[str, float]:
                 frozen = frozen_lookup.get(float(target_load))
                 if frozen is None:
                     raise KeyError(f"Frozen greedy metrics do not contain load {target_load}")
-                policy_embb = _mean(policy_metrics, 'embb_total_rate')
+                policy_embb = _mean_any(
+                    policy_metrics,
+                    ('embb_total_rate_after_puncture_deduction', 'embb_rate_after_local_puncture_deduction', 'embb_total_rate'),
+                )
                 policy_adm = _mean(policy_metrics, 'scheduled_ratio', 1.0)
                 policy_reliability = _mean(policy_metrics, 'admitted_urllc_reliability', np.nan)
                 policy_effective_success = _mean(policy_metrics, 'effective_urllc_success_over_arrivals', 1.0)
@@ -2114,7 +2242,7 @@ def evaluate_against_greedy(env, model, cfg) -> Dict[str, float]:
                     policy_effective_success,
                     rate_ratio,
                     (
-                        _mean(policy_metrics, 'embb_service_ratio')
+                        _mean_any(policy_metrics, ('embb_service_ratio_after_puncture_deduction', 'embb_service_ratio'))
                         / max(float(frozen.get('embb_service_ratio', 0.0)), 1.0e-9)
                     ),
                     (

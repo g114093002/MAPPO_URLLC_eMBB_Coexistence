@@ -60,7 +60,7 @@ def _write_compare_manifest(payload: Dict[str, object]) -> Path:
 
 def _build_main_like_configs() -> Tuple[SystemConfig, URLLCConfig, eMBBConfig, AlgorithmConfig, SimulationConfig]:
     sys_cfg = SystemConfig()
-    sys_cfg.num_subcarriers = 8
+    sys_cfg.num_subcarriers = 12
     sys_cfg.num_embb_users = 20
     sys_cfg.num_urllc_users = 8
     sys_cfg.shadowing_std = 6.0
@@ -68,9 +68,9 @@ def _build_main_like_configs() -> Tuple[SystemConfig, URLLCConfig, eMBBConfig, A
     sys_cfg.refresh_derived_params()
 
     urllc_cfg = URLLCConfig()
-    urllc_cfg.packet_lengths = [160, 180, 200]
+    urllc_cfg.packet_lengths = [120, 150, 180]
     urllc_cfg.target_error_probability = 1e-3
-    urllc_cfg.power_limits = [24] * sys_cfg.num_urllc_users
+    urllc_cfg.power_limits = [26] * sys_cfg.num_urllc_users
 
     embb_cfg = eMBBConfig()
     embb_cfg.power_limits = [23] * sys_cfg.num_embb_users
@@ -81,11 +81,20 @@ def _build_main_like_configs() -> Tuple[SystemConfig, URLLCConfig, eMBBConfig, A
     sim_cfg = SimulationConfig()
     sim_cfg.verbose = False
     sim_cfg.urllc_arrival_prob = 0.45
-    # Slot-based Poisson arrival rate (pkt/slot). We use load-scaled total-rate
-    # semantics (fixed=False): lambda(load)=base_lambda*load/base_total_per_uav.
-    # With base_total_per_uav~=10, base_lambda=25.6 maps load=25 to ~64 pkt/slot.
+    # Keep compare/report sweeps aligned with the current greedy/report line:
+    # `urllc_poisson_rate` is interpreted by the env as a per-user slot-level
+    # baseline when `rl_cfg.env.urllc_poisson_rate_is_per_user=True`. In that
+    # regime, user-count scaling already changes total offered traffic, so we
+    # must not additionally scale lambda by load.
     sim_cfg.urllc_poisson_rate = 25.6
-    sim_cfg.fixed_urllc_poisson_rate = False
+    default_env_cfg = SRMAPPOConfig().env
+    sim_cfg.urllc_poisson_rate_is_per_user = bool(
+        getattr(default_env_cfg, "urllc_poisson_rate_is_per_user", False)
+    )
+    sim_cfg.urllc_poisson_rate_is_slot_level = bool(
+        getattr(default_env_cfg, "urllc_poisson_rate_is_slot_level", False)
+    )
+    sim_cfg.fixed_urllc_poisson_rate = bool(sim_cfg.urllc_poisson_rate_is_per_user)
     sim_cfg.urllc_user_ratio = 0.30
     sim_cfg.min_user_density = 1
     sim_cfg.max_user_density = 40
@@ -93,13 +102,22 @@ def _build_main_like_configs() -> Tuple[SystemConfig, URLLCConfig, eMBBConfig, A
 
     # Optional runtime override for report/compare sweeps.
     # Useful when we need a fixed per-user lambda debug run without editing presets.
-    poisson_override = os.environ.get("SR_MAPPO_URLLC_POISSON_RATE_OVERRIDE", "").strip()
+    poisson_override = (
+        os.environ.get("SR_MAPPO_REPORT_URLLC_POISSON_RATE_OVERRIDE", "").strip()
+        or os.environ.get("SR_MAPPO_URLLC_POISSON_RATE_OVERRIDE", "").strip()
+    )
     if poisson_override:
         try:
             sim_cfg.urllc_poisson_rate = float(poisson_override)
             sim_cfg.fixed_urllc_poisson_rate = True
         except ValueError:
             pass
+    fixed_override = (
+        os.environ.get("SR_MAPPO_REPORT_FIXED_URLLC_POISSON_RATE", "").strip()
+        or os.environ.get("SR_MAPPO_FIXED_URLLC_POISSON_RATE", "").strip()
+    ).lower()
+    if fixed_override:
+        sim_cfg.fixed_urllc_poisson_rate = bool(fixed_override in {"1", "true", "yes", "on"})
     return sys_cfg, urllc_cfg, embb_cfg, algo_cfg, sim_cfg
 
 
@@ -346,7 +364,14 @@ def _configure_density_scenario(
     total_users = max(1, int(round(base_total_per_uav * sys_cfg.num_uavs * scale)))
     urllc_ratio = float(getattr(sim_cfg, 'urllc_user_ratio', 0.0))
     urllc_ratio = float(np.clip(urllc_ratio, 0.0, 1.0))
-    if urllc_ratio <= 0.0:
+    fixed_embb_user_count = int(getattr(sim_cfg, "fixed_embb_user_count", 0) or 0)
+    if fixed_embb_user_count > 0:
+        # Optional strict comparability mode:
+        # keep eMBB user count fixed across mixes; only URLLC side changes.
+        fixed_e = int(np.clip(fixed_embb_user_count, 1, max(total_users - 1, 1)))
+        sys_cfg.num_embb_users = int(fixed_e)
+        sys_cfg.num_urllc_users = int(max(total_users - fixed_e, 1))
+    elif urllc_ratio <= 0.0:
         # Explicitly support eMBB-only scenario (URLLC ratio = 0.0).
         sys_cfg.num_urllc_users = 0
         sys_cfg.num_embb_users = max(1, total_users)
@@ -359,12 +384,23 @@ def _configure_density_scenario(
         sys_cfg.num_embb_users = max(1, total_users - sys_cfg.num_urllc_users)
     sys_cfg.refresh_derived_params()
 
-    urllc_cfg.power_limits = [24] * sys_cfg.num_urllc_users
+    urllc_cfg.power_limits = [26] * sys_cfg.num_urllc_users
     embb_cfg.power_limits = [23] * sys_cfg.num_embb_users
-    if not bool(getattr(sim_cfg, 'fixed_urllc_poisson_rate', False)):
+    per_user_poisson_semantics = bool(
+        getattr(
+            sim_cfg,
+            "urllc_poisson_rate_is_per_user",
+            getattr(SRMAPPOConfig().env, "urllc_poisson_rate_is_per_user", False),
+        )
+    )
+    if not bool(getattr(sim_cfg, 'fixed_urllc_poisson_rate', False)) and not per_user_poisson_semantics:
         sim_cfg.urllc_poisson_rate = max(1e-6, base_sim_cfg.urllc_poisson_rate * scale)
     sim_cfg.verbose = False
     return sys_cfg, urllc_cfg, embb_cfg, algo_cfg, sim_cfg
+
+
+def _paired_density_seed(train_seed: int, density_idx: int, episode_idx: int) -> int:
+    return int(train_seed + 5000 + density_idx * 100 + episode_idx)
 
 
 def _aggregate_episode_summaries(summaries: List[Dict[str, float]]) -> Dict[str, float]:
@@ -373,10 +409,29 @@ def _aggregate_episode_summaries(summaries: List[Dict[str, float]]) -> Dict[str,
         finite = values[np.isfinite(values)]
         return float(np.mean(finite)) if finite.size else float(default)
 
+    def _mean_any(keys, default: float = 0.0) -> float:
+        values = []
+        for item in summaries:
+            chosen = default
+            for key in keys:
+                if key in item:
+                    chosen = item.get(key, default)
+                    break
+            values.append(float(chosen))
+        arr = np.asarray(values, dtype=float)
+        finite = arr[np.isfinite(arr)]
+        return float(np.mean(finite)) if finite.size else float(default)
+
     return {
-        'embb_rates': _mean('embb_total_rate'),
-        'embb_user_rates': _mean('embb_user_rate_mean'),
-        'embb_service_ratio': _mean('embb_service_ratio'),
+        'embb_rates': _mean_any(
+            ('embb_total_rate_after_puncture_deduction', 'embb_rate_after_local_puncture_deduction', 'embb_total_rate')
+        ),
+        'embb_user_rates': _mean_any(
+            ('embb_user_rate_mean_after_puncture_deduction', 'embb_user_rate_mean')
+        ),
+        'embb_service_ratio': _mean_any(
+            ('embb_service_ratio_after_puncture_deduction', 'embb_service_ratio')
+        ),
         'urllc_admission': _mean('urllc_admission_rate'),
         'admitted_urllc_reliability': _mean('admitted_urllc_reliability', np.nan),
         'effective_urllc_success_over_arrivals': _mean('effective_urllc_success_over_arrivals', 0.0),
@@ -400,10 +455,28 @@ def _aggregate_episode_summaries(summaries: List[Dict[str, float]]) -> Dict[str,
 
 def _summary_from_slot_result(result_slot: Dict, sys_cfg: SystemConfig) -> Dict[str, float]:
     metrics = result_slot['metrics']
+    embb_total_rate = float(metrics.get('embb_total_rate', 0.0))
+    embb_total_rate_eff = float(
+        metrics.get(
+            'embb_total_rate_after_puncture_deduction',
+            metrics.get('embb_rate_after_local_puncture_deduction', embb_total_rate),
+        )
+    )
+    embb_user_rate_mean = float(metrics.get('embb_user_rate_mean', 0.0))
+    embb_user_rate_mean_eff = float(
+        metrics.get('embb_user_rate_mean_after_puncture_deduction', embb_user_rate_mean)
+    )
+    embb_service_ratio = float(metrics.get('embb_served_users', 0.0) / max(sys_cfg.num_embb_users, 1))
+    embb_service_ratio_eff = float(
+        metrics.get('embb_service_ratio_after_puncture_deduction', embb_service_ratio)
+    )
     return {
-        'embb_total_rate': float(metrics.get('embb_total_rate', 0.0)),
-        'embb_user_rate_mean': float(metrics.get('embb_user_rate_mean', 0.0)),
-        'embb_service_ratio': float(metrics.get('embb_served_users', 0.0) / max(sys_cfg.num_embb_users, 1)),
+        'embb_total_rate': embb_total_rate,
+        'embb_total_rate_after_puncture_deduction': embb_total_rate_eff,
+        'embb_user_rate_mean': embb_user_rate_mean,
+        'embb_user_rate_mean_after_puncture_deduction': embb_user_rate_mean_eff,
+        'embb_service_ratio': embb_service_ratio,
+        'embb_service_ratio_after_puncture_deduction': embb_service_ratio_eff,
         'urllc_admission_rate': float(metrics.get('urllc_admission_rate', 1.0)),
         'admitted_urllc_reliability': float(
             metrics.get('admitted_urllc_reliability', metrics.get('urllc_success_rate', np.nan))
@@ -492,7 +565,7 @@ def run_sr_mappo_density_sweep(
 
         summaries = []
         for episode_idx in range(episodes_per_density):
-            seed = eval_cfg.training.train_seed + 5000 + density_idx * 100 + episode_idx
+            seed = _paired_density_seed(eval_cfg.training.train_seed, density_idx, episode_idx)
             summaries.append(rollout_episode(env, model=model, seed=seed, use_greedy=False))
 
         agg = _aggregate_episode_summaries(summaries)
@@ -557,7 +630,7 @@ def run_env_greedy_density_sweep(
         env = SRMAPPOPhaseAEnv(sys_cfg, urllc_cfg, embb_cfg, algo_cfg, sim_cfg, env_cfg)
         summaries = []
         for episode_idx in range(episodes_per_density):
-            seed = env_cfg.training.train_seed + 7000 + density_idx * 100 + episode_idx
+            seed = _paired_density_seed(env_cfg.training.train_seed, density_idx, episode_idx)
             summaries.append(rollout_episode(env, model=None, seed=seed, use_greedy=True, greedy_policy=greedy_policy))
 
         agg = _aggregate_episode_summaries(summaries)
@@ -605,7 +678,7 @@ def run_original_greedy_density_sweep(
         summaries = []
         for episode_idx in range(episodes_per_density):
             sim_local = deepcopy(sim_cfg)
-            sim_local.random_seed = int(rl_cfg.training.train_seed + 7000 + density_idx * 100 + episode_idx)
+            sim_local.random_seed = _paired_density_seed(rl_cfg.training.train_seed, density_idx, episode_idx)
             simulation = create_simulation(sys_cfg, urllc_cfg, embb_cfg, algo_cfg, sim_local)
             if normal_mode == "v1":
                 result_slot = simulation.run_single_allocation_normal_v1(slot_index=episode_idx)
@@ -660,7 +733,7 @@ def run_upper_bound_density_sweep(
         summaries = []
         for episode_idx in range(episodes_per_density):
             sim_local = deepcopy(sim_cfg)
-            sim_local.random_seed = int(rl_cfg.training.train_seed + 9000 + density_idx * 100 + episode_idx)
+            sim_local.random_seed = _paired_density_seed(rl_cfg.training.train_seed, density_idx, episode_idx)
             simulation = create_simulation(sys_cfg, urllc_cfg, embb_cfg, algo_cfg, sim_local)
             if mode == "throughput_feasible_oracle":
                 result_slot = simulation.run_throughput_feasible_oracle(slot_index=episode_idx)
