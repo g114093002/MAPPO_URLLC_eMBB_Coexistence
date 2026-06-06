@@ -1,7 +1,10 @@
 ﻿"""Configuration objects for Shielded Recurrent Action-Masked MAPPO."""
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List
+
+import torch
 
 
 @dataclass
@@ -56,6 +59,7 @@ class RewardConfig:
     overlay_when_lower_intercell_puncture_available_penalty_weight: float = 0.0
     missed_feasible_puncture_penalty_weight: float = 0.0
     power_penalty_scale: float = 0.01
+    overlay_power_surcharge_weight: float = 0.0
     # Step-level intercell-aware penalty: penalize outgoing intercell interference deltas versus eMBB-only baseline.
     # Normalized by `terminal_intercell_penalty_normalizer`.
     step_intercell_outgoing_delta_penalty_weight: float = 0.0
@@ -135,6 +139,8 @@ class RewardConfig:
     terminal_admission_collapse_penalty_weight: float = 0.0
     terminal_admission_collapse_floor_by_load: Dict[float, float] = field(default_factory=dict)
     planning_embb_rate_weight: float = 1.50
+    planning_phase0_total_power_penalty_weight: float = 0.0
+    planning_phase0_positive_power_delta_penalty_weight: float = 0.0
     planning_embb_service_weight: float = 0.0
     planning_embb_min_rate_weight: float = 0.0
     planning_embb_fairness_weight: float = 0.0
@@ -215,8 +221,12 @@ class RewardConfig:
     terminal_mean_intercell_mw_penalty_weight: float = 0.0
     # Extra power/interference penalties relative to the per-episode greedy reference (optional).
     terminal_intercell_power_penalty_weight: float = 0.0
+    terminal_total_power_budget_penalty_weight: float = 0.0
     terminal_total_power_over_greedy_penalty_weight: float = 0.0
     terminal_embb_power_over_greedy_penalty_weight: float = 0.0
+    terminal_urllc_power_over_greedy_penalty_weight: float = 0.0
+    terminal_urllc_power_share_penalty_weight: float = 0.0
+    terminal_urllc_power_share_ceiling: float = 1.0
     terminal_power_over_greedy_allowed_ratio: float = 1.10
 
     # Owner effectiveness shaping (terminal; defaults off; enable via experiment preset).
@@ -253,6 +263,22 @@ class RewardConfig:
     terminal_phase_a_effective_nonzero_floor: float = 0.15
     terminal_phase_a_abs_delta_floor_penalty_weight: float = 0.0
     terminal_phase_a_abs_delta_floor: float = 0.04
+    allowed_step_reward_terms: List[str] = field(default_factory=lambda: [
+        "planning_embb_rate_delta_reward",
+        "phase0_baseline_power_penalty",
+        "schedule_success",
+        "urgency_bonus",
+        "embb_damage",
+        "power_penalty",
+        "overlay_power_surcharge",
+    ])
+    allowed_terminal_reward_terms: List[str] = field(default_factory=lambda: [
+        "terminal_embb_rate",
+        "terminal_urllc_admission",
+        "terminal_embb_min_rate_satisfaction_bonus",
+        "terminal_total_power_budget_penalty",
+        "terminal_phase_a_raw_saturation_penalty",
+    ])
 
 
 @dataclass
@@ -405,6 +431,13 @@ class EnvAdapterConfig:
     freeze_channel_gains_across_episodes: bool = False
     include_frontier_progress_obs: bool = False
     include_quota_progress_obs: bool = False
+    include_rb_summary_observation: bool = True
+    simplified_rb_summary_observation: bool = False
+    # Legacy-compatibility toggle: newer code can project the partial-reuse
+    # pattern directly into the fixed eMBB baseline owner/rate tensors before
+    # Phase-A starts. Keep this off by default so clean training stays closer
+    # to the older short-run behavior unless a preset explicitly opts in.
+    apply_partial_reuse_to_fixed_baseline_state: bool = False
     phase_a_embb_power_delta_values: List[float] = field(default_factory=list)
     disable_phase_a_embb_power_projection_for_debug: bool = False
     phase_a_embb_power_scale_bound_relax: float = 1.0
@@ -486,6 +519,14 @@ class EnvAdapterConfig:
     admission_hard_guard_max_intercell_cost_w_by_load: Dict[float, float] = field(default_factory=dict)
     admission_hard_guard_apply_to_overlay: bool = True
     admission_hard_guard_apply_to_puncture: bool = True
+    # Structural mode guard for high-load stress regimes:
+    # when feasible puncture candidates exist, suppress most overlay choices and
+    # keep only exceptionally strong overlay candidates. This is stricter than
+    # reward shaping and is intended to prevent overlay-heavy local optima.
+    enable_overlay_dominance_guard: bool = False
+    overlay_dominance_guard_load_floor: float = 0.0
+    overlay_dominance_guard_min_overlay_retention: float = 0.0
+    overlay_dominance_guard_max_overlay_vs_puncture_intercell_ratio: float = 1.0
     good_overlay_retention_threshold: float = 0.85
     good_overlay_intercell_ratio_to_local_min: float = 1.5
     # Supported snapshot builders:
@@ -529,6 +570,7 @@ class RecurrentNetworkConfig:
     critic_hidden_dim: int = 192
     min_power_log_std: float = -5.0
     max_power_log_std: float = 1.0
+    normalize_joint_log_prob_by_active_heads: bool = False
 
 
 @dataclass
@@ -552,6 +594,11 @@ class TrainingConfig:
 
     total_iterations: int = 5000
     rollout_horizon: int = 256
+    rollout_horizon_env_steps: int = 0
+    num_rollout_envs: int = 1
+    parallel_rollout_workers: int = 1
+    rollout_worker_device: str = "cpu"
+    disable_parallel_rollout: bool = False
     ppo_epochs: int = 4
     minibatch_size: int = 256
     bc_episodes: int = 0
@@ -619,6 +666,7 @@ class TrainingConfig:
     checkpoint_dir: str = "checkpoints"
     run_name: str = "sr_mappo_phase_a"
     save_best_only: bool = True
+    progress_every: int = 20
     keep_best_non_worse_than_greedy: bool = False
     non_worse_power_tolerance: float = 1.20
     non_worse_rate_ratio: float = 0.98
@@ -687,6 +735,26 @@ class TrainingConfig:
     balanced_checkpoint_power_penalty_weight: float = 0.0
     hardest_load_sampling_bias: float = 0.70
     second_hardest_load_sampling_bias: float = 0.20
+    clean_stress_eval_enabled: bool = False
+    clean_stress_eval_target_load: float = 24.0
+    clean_stress_eval_lambdas: List[float] = field(default_factory=lambda: [5.0, 7.0, 9.0])
+    clean_stress_eval_episodes_per_lambda: int = 2
+    clean_stress_eval_embb_rate_weight: float = 1.0
+    clean_stress_eval_admission_weight: float = 22.0
+    clean_stress_eval_minrate_weight: float = 28.0
+    clean_stress_eval_minrate_shortfall_penalty_weight: float = 42.0
+    clean_stress_eval_power_penalty_weight: float = 0.0
+    clean_stress_eval_packet_weight: float = 0.10
+    clean_stress_eval_overlay_penalty_weight: float = 0.0
+    # Preserve a few eval-time checkpoints so long runs can be stress-tested at
+    # earlier operating points instead of only the final nominal-best model.
+    clean_eval_checkpoint_iterations: List[int] = field(default_factory=lambda: [80, 160, 320, 640])
+    # Also preserve fixed-interval eval checkpoints for long-run plateau checks.
+    clean_eval_checkpoint_interval: int = 2000
+    clean_eval_checkpoint_start_iteration: int = 2000
+    # Flush the full JSON history file at a lower cadence than the per-iteration
+    # JSONL append path to avoid repeated full rewrites during long runs.
+    clean_history_flush_every: int = 50
 
 
 @dataclass
@@ -702,11 +770,21 @@ class SRMAPPOConfig:
     training: TrainingConfig = field(default_factory=TrainingConfig)
 
 
+def torch_load_checkpoint(path: str | Path, map_location: Any = "cpu") -> Any:
+    """Load trusted SR-MAPPO checkpoints across PyTorch versions."""
+    try:
+        return torch.load(path, map_location=map_location, weights_only=False)
+    except TypeError:
+        return torch.load(path, map_location=map_location)
+
+
 def cfg_from_dict(data: Dict[str, Any] | None) -> SRMAPPOConfig:
     """Rebuild a config object from a checkpoint payload."""
     cfg = SRMAPPOConfig()
     if not data:
         return cfg
+    if isinstance(data, SRMAPPOConfig):
+        return data
     if "name" in data:
         cfg.name = str(data["name"])
     for section in ("action", "reward", "shield", "env", "network", "training"):

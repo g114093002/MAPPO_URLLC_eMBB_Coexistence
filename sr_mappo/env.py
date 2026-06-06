@@ -66,6 +66,7 @@ class SRMAPPOPhaseAEnv:
         # Per-episode URLLC packet base cache:
         # cache URLLC-only candidate primitives so pairwise overlay checks can focus on delta terms.
         self._urllc_packet_base_cache: Dict[Tuple, Dict[str, float]] = {}
+        self._urllc_packet_base_cache_cell_index = -1
         self.phase_a_embb_power_enabled = bool(getattr(self.rl_cfg.env, "allow_phase_a_embb_power_adjustment", False))
         # Runtime switch: enabled by trainer only (report/eval keep deterministic).
         self.admission_guard_training_jitter_enabled = False
@@ -216,6 +217,23 @@ class SRMAPPOPhaseAEnv:
                 candidates = observations[agent_id].candidates
                 self.overlay_candidate_pairs += len(candidates)
                 self.overlay_feasible_pairs += sum(int(candidate.overlay_feasible) for candidate in candidates)
+                self.puncture_feasible_pairs += sum(int(candidate.puncture_feasible) for candidate in candidates)
+                self.both_feasible_pairs += sum(
+                    int(bool(candidate.overlay_feasible) and bool(candidate.puncture_feasible))
+                    for candidate in candidates
+                )
+                self.overlay_only_feasible_pairs += sum(
+                    int(bool(candidate.overlay_feasible) and not bool(candidate.puncture_feasible))
+                    for candidate in candidates
+                )
+                self.puncture_only_feasible_pairs += sum(
+                    int(not bool(candidate.overlay_feasible) and bool(candidate.puncture_feasible))
+                    for candidate in candidates
+                )
+                self.neither_feasible_pairs += sum(
+                    int(not bool(candidate.overlay_feasible) and not bool(candidate.puncture_feasible))
+                    for candidate in candidates
+                )
                 self.phase_a_feasible_candidate_pairs += sum(
                     int(bool(candidate.overlay_feasible) or bool(candidate.puncture_feasible))
                     for candidate in candidates
@@ -254,9 +272,15 @@ class SRMAPPOPhaseAEnv:
                     observation=observations[agent_id],
                     shielded_action=shielded[agent_id],
                 )
+                filtered_step_reward_terms = self._filter_reward_terms(
+                    outcome.get("reward_terms", {}),
+                    allowed_terms=getattr(self.rl_cfg.reward, "allowed_step_reward_terms", []),
+                )
+                outcome["reward_terms"] = filtered_step_reward_terms
+                outcome["reward"] = float(sum(filtered_step_reward_terms.values()))
                 step_info[agent_id] = outcome
                 team_reward += outcome["reward"]
-                for key, value in outcome.get("reward_terms", {}).items():
+                for key, value in filtered_step_reward_terms.items():
                     shared_reward_terms[key] = shared_reward_terms.get(key, 0.0) + float(value)
             self.profile_step_apply_action_sec += float(perf_counter() - _apply_t0)
 
@@ -621,14 +645,14 @@ class SRMAPPOPhaseAEnv:
                     gap = max(srv_floor_used - service_ratio, 0.0)
                     if gap > 0.0:
                         penalty = float(srv_floor_w * (gap * gap))
-                        terminal_reward_terms["terminal_embb_service_floor_penalty"] = float(penalty)
-                        team_reward -= float(penalty)
+                        terminal_reward_terms["terminal_embb_service_floor_penalty"] = -float(penalty)
+                        team_reward += terminal_reward_terms["terminal_embb_service_floor_penalty"]
                 if min_floor_w > 0.0 and min_floor > 0.0:
                     gap = max(min_floor_used - min_rate_ratio, 0.0)
                     if gap > 0.0:
                         penalty = float(min_floor_w * (gap * gap))
-                        terminal_reward_terms["terminal_embb_min_rate_floor_penalty"] = float(penalty)
-                        team_reward -= float(penalty)
+                        terminal_reward_terms["terminal_embb_min_rate_floor_penalty"] = -float(penalty)
+                        team_reward += terminal_reward_terms["terminal_embb_min_rate_floor_penalty"]
                 if srv_bonus_w2 > 0.0:
                     bonus = float(srv_bonus_w2 * service_ratio)
                     terminal_reward_terms["terminal_embb_service_bonus"] = float(bonus)
@@ -670,8 +694,8 @@ class SRMAPPOPhaseAEnv:
                         team_reward += float(bonus)
                     if srv_short_w > 0.0 and service_shortfall > 0.0:
                         penalty = float(srv_short_w * (service_shortfall * service_shortfall))
-                        terminal_reward_terms["terminal_embb_service_vs_greedy_shortfall_penalty"] = float(penalty)
-                        team_reward -= float(penalty)
+                        terminal_reward_terms["terminal_embb_service_vs_greedy_shortfall_penalty"] = -float(penalty)
+                        team_reward += terminal_reward_terms["terminal_embb_service_vs_greedy_shortfall_penalty"]
 
                 # Extra tradeoff penalty: high URLLC admission while violating a minimum eMBB service floor.
                 tradeoff_w = float(getattr(self.rl_cfg.reward, "urllc_admission_over_service_tradeoff_penalty_weight", 0.0) or 0.0)
@@ -748,8 +772,8 @@ class SRMAPPOPhaseAEnv:
                     short = max(adm_floor_used - float(summary.get("urllc_admission_rate", 0.0)), 0.0)
                     if short > 0.0:
                         penalty = float(adm_w_used * (short * short))
-                        terminal_reward_terms["terminal_admission_floor_soft_penalty"] = float(penalty)
-                        team_reward -= float(penalty)
+                        terminal_reward_terms["terminal_admission_floor_soft_penalty"] = -float(penalty)
+                        team_reward += terminal_reward_terms["terminal_admission_floor_soft_penalty"]
 
                 # Phase-A power saturation/diversity soft penalties.
                 sat_w = float(getattr(self.rl_cfg.reward, "terminal_power_saturation_penalty_weight", 0.0) or 0.0)
@@ -887,30 +911,78 @@ class SRMAPPOPhaseAEnv:
 
                 # Extra intercell/power-over-greedy penalties (terminal; requires per-episode greedy reference metrics).
                 intercell_power_w = float(getattr(self.rl_cfg.reward, "terminal_intercell_power_penalty_weight", 0.0) or 0.0)
+                total_budget_w = float(getattr(self.rl_cfg.reward, "terminal_total_power_budget_penalty_weight", 0.0) or 0.0)
                 total_over_w = float(getattr(self.rl_cfg.reward, "terminal_total_power_over_greedy_penalty_weight", 0.0) or 0.0)
                 embb_over_w = float(getattr(self.rl_cfg.reward, "terminal_embb_power_over_greedy_penalty_weight", 0.0) or 0.0)
+                urllc_over_w = float(getattr(self.rl_cfg.reward, "terminal_urllc_power_over_greedy_penalty_weight", 0.0) or 0.0)
+                urllc_share_w = float(getattr(self.rl_cfg.reward, "terminal_urllc_power_share_penalty_weight", 0.0) or 0.0)
+                urllc_share_ceiling = float(getattr(self.rl_cfg.reward, "terminal_urllc_power_share_ceiling", 1.0) or 1.0)
                 allowed_default = float(getattr(self.rl_cfg.reward, "terminal_power_over_greedy_allowed_ratio", 1.10) or 1.10)
                 allowed_map = getattr(self.rl_cfg.env, "max_total_power_ratio_to_greedy_by_load", {}) or {}
                 allowed_ratio = _nearest_load_floor(allowed_map, allowed_default)
-                baseline_power = max(float(getattr(self, "original_greedy_metrics", {}).get("total_power", 0.0)), 1.0e-9)
+                greedy_metrics = dict(getattr(self, "original_greedy_metrics", {}) or {})
+                baseline_power_raw = float(greedy_metrics.get("total_power", 0.0) or 0.0)
+                baseline_embb_power_raw = float(greedy_metrics.get("embb_power", 0.0) or 0.0)
+                baseline_urllc_power_raw = float(greedy_metrics.get("urllc_power", 0.0) or 0.0)
+                baseline_power = max(baseline_power_raw, 1.0e-9)
+                baseline_urllc_power = max(baseline_urllc_power_raw, 1.0e-9)
                 if intercell_power_w > 0.0:
                     penalty = float(intercell_power_w * float(summary.get("mean_intercell_interference_mw", 0.0)) / max(inter_norm, 1.0e-12))
-                    terminal_reward_terms["terminal_intercell_power_penalty"] = float(penalty)
-                    team_reward -= float(penalty)
-                if (total_over_w > 0.0 or embb_over_w > 0.0) and baseline_power > 0.0:
+                    terminal_reward_terms["terminal_intercell_power_penalty"] = -float(penalty)
+                    team_reward += terminal_reward_terms["terminal_intercell_power_penalty"]
+                if total_budget_w > 0.0:
+                    embb_limits_dbm = list(getattr(self.embb_cfg, "power_limits", []) or [])
+                    urllc_limits_dbm = list(getattr(self.urllc_cfg, "power_limits", []) or [])
+                    embb_budget = float(
+                        sum(
+                            min(
+                                self.allocator._dbm_to_watts(float(value)),
+                                self.algo_cfg.power_upper_bound,
+                            )
+                            for value in embb_limits_dbm
+                        )
+                    )
+                    urllc_budget = float(
+                        sum(
+                            min(
+                                self.allocator._dbm_to_watts(float(value)),
+                                self.algo_cfg.power_upper_bound,
+                            )
+                            for value in urllc_limits_dbm
+                        )
+                    )
+                    system_power_budget = max(embb_budget + urllc_budget, 1.0e-9)
+                    total_power_norm = float(summary.get("total_power", 0.0)) / system_power_budget
+                    terminal_reward_terms["terminal_total_power_budget_penalty"] = -float(total_budget_w * total_power_norm)
+                    team_reward += terminal_reward_terms["terminal_total_power_budget_penalty"]
+                if (total_over_w > 0.0 or embb_over_w > 0.0 or urllc_over_w > 0.0) and baseline_power_raw > 1.0e-9:
                     total_ratio = float(summary.get("total_power", 0.0)) / baseline_power
                     over = max(total_ratio - float(allowed_ratio), 0.0)
                     if total_over_w > 0.0 and over > 0.0:
                         penalty = float(total_over_w * (over * over))
-                        terminal_reward_terms["terminal_total_power_over_greedy_penalty"] = float(penalty)
-                        team_reward -= float(penalty)
-                    if embb_over_w > 0.0:
-                        embb_ratio = float(summary.get("embb_power", 0.0)) / baseline_power
+                        terminal_reward_terms["terminal_total_power_over_greedy_penalty"] = -float(penalty)
+                        team_reward += terminal_reward_terms["terminal_total_power_over_greedy_penalty"]
+                    if embb_over_w > 0.0 and baseline_embb_power_raw > 1.0e-9:
+                        embb_ratio = float(summary.get("embb_power", 0.0)) / baseline_embb_power_raw
                         embb_over = max(embb_ratio - float(allowed_ratio), 0.0)
                         if embb_over > 0.0:
                             penalty = float(embb_over_w * (embb_over * embb_over))
-                            terminal_reward_terms["terminal_embb_power_over_greedy_penalty"] = float(penalty)
-                            team_reward -= float(penalty)
+                            terminal_reward_terms["terminal_embb_power_over_greedy_penalty"] = -float(penalty)
+                            team_reward += terminal_reward_terms["terminal_embb_power_over_greedy_penalty"]
+                    if urllc_over_w > 0.0 and baseline_urllc_power_raw > 1.0e-9:
+                        urllc_ratio = float(summary.get("urllc_power", 0.0)) / baseline_urllc_power
+                        urllc_over = max(urllc_ratio - float(allowed_ratio), 0.0)
+                        if urllc_over > 0.0:
+                            penalty = float(urllc_over_w * (urllc_over * urllc_over))
+                            terminal_reward_terms["terminal_urllc_power_over_greedy_penalty"] = -float(penalty)
+                            team_reward += terminal_reward_terms["terminal_urllc_power_over_greedy_penalty"]
+                if urllc_share_w > 0.0 and urllc_share_ceiling > 0.0:
+                    urllc_power_share = float(summary.get("urllc_power", 0.0)) / max(float(summary.get("total_power", 0.0)), 1.0e-9)
+                    share_excess = max(urllc_power_share - urllc_share_ceiling, 0.0)
+                    if share_excess > 0.0:
+                        penalty = float(urllc_share_w * (share_excess * share_excess))
+                        terminal_reward_terms["terminal_urllc_power_share_penalty"] = -float(penalty)
+                        team_reward += terminal_reward_terms["terminal_urllc_power_share_penalty"]
 
                 # Served-user-count bonus (terminal; load-aware target).
                 served_w = float(getattr(self.rl_cfg.reward, "terminal_embb_served_user_count_weight", 0.0) or 0.0)
@@ -929,8 +1001,8 @@ class SRMAPPOPhaseAEnv:
                     deficit = max(served_target - served_count, 0.0) / max(served_target, 1.0e-9)
                     if deficit > 0.0:
                         penalty = float(served_def_w * (deficit * deficit))
-                        terminal_reward_terms["terminal_embb_served_user_deficit_penalty"] = float(penalty)
-                        team_reward -= float(penalty)
+                        terminal_reward_terms["terminal_embb_served_user_deficit_penalty"] = -float(penalty)
+                        team_reward += terminal_reward_terms["terminal_embb_served_user_deficit_penalty"]
                 if owner_restore_w > 0.0:
                     restored = float(summary.get("phase0_owner_restored_to_snapshot_ratio", 0.0))
                     if restored > 0.0:
@@ -1022,6 +1094,13 @@ class SRMAPPOPhaseAEnv:
                     phasea_abs_deficit = max(phasea_abs_floor - phasea_abs_exec, 0.0)
                     terminal_reward_terms["terminal_phase_a_abs_delta_floor_penalty"] = float(-phasea_abs_floor_w * phasea_abs_deficit)
                     team_reward += terminal_reward_terms["terminal_phase_a_abs_delta_floor_penalty"]
+
+            terminal_reward_terms = self._filter_reward_terms(
+                terminal_reward_terms,
+                allowed_terms=getattr(self.rl_cfg.reward, "allowed_terminal_reward_terms", []),
+            )
+            retained_terminal_total = float(sum(terminal_reward_terms.values()))
+            team_reward = float(sum(shared_reward_terms.values()) + retained_terminal_total)
 
             for key, value in terminal_reward_terms.items():
                 shared_reward_terms[key] = shared_reward_terms.get(key, 0.0) + float(value)
@@ -1127,12 +1206,10 @@ class SRMAPPOPhaseAEnv:
         )
         phase_a_power_active = bool(
             (not planning_phase)
-            and self.rl_cfg.env.learn_embb_baseline
             and bool(self._phase_a_embb_power_runtime_enabled())
         )
         embb_power_active = bool(
-            self.rl_cfg.env.learn_embb_baseline
-            and (phase0_power_active or phase_a_power_active)
+            phase0_power_active or phase_a_power_active
         )
         return {
             "planning_phase": planning_phase,
@@ -1284,7 +1361,7 @@ class SRMAPPOPhaseAEnv:
             # Phase-A eMBB power is a *repair* controller. It is only allowed to write when the selected
             # URLLC action actually admits a packet (handled at execution time). Here we do the minimal
             # local feasibility gating so KEEP-mode decisions do not pass through projection.
-            if not self.rl_cfg.env.learn_embb_baseline or not self._phase_a_embb_power_runtime_enabled():
+            if not self._phase_a_embb_power_runtime_enabled():
                 shielded_action.action.embb_power_delta = 0.0
                 info["invalid_or_masked"] = True
                 info["zeroed_reason"] = "inactive_head"
@@ -1427,6 +1504,33 @@ class SRMAPPOPhaseAEnv:
         self,
         joint_actions: Dict[str, HybridAction],
     ) -> Tuple[Dict[str, AgentObservation], Dict[str, float], Dict[str, bool], Dict[str, Dict]]:
+        if self.best_uav_per_user is None:
+            episode_assoc = getattr(self, "_episode_association_cache", None)
+            if episode_assoc is not None:
+                self.best_uav_per_user = np.asarray(episode_assoc, dtype=int).copy()
+        if self.best_uav_per_user is None:
+            cached_assoc = getattr(self, "_fixed_association_cache", None)
+            if cached_assoc is not None:
+                self.best_uav_per_user = np.asarray(cached_assoc, dtype=int).copy()
+        if self.channel_gains_mag_sq is None:
+            episode_channel = getattr(self, "_episode_channel_gains_cache", None)
+            if episode_channel is not None:
+                self.channel_gains_mag_sq = np.asarray(episode_channel, dtype=float).copy()
+        if self.channel_gains_mag_sq is None:
+            cached_channel = getattr(self, "_fixed_channel_gains_cache", None)
+            if cached_channel is not None:
+                self.channel_gains_mag_sq = np.asarray(cached_channel, dtype=float).copy()
+        if self.embb_selected_uavs is None and self.best_uav_per_user is not None:
+            embb_start = int(self.sys_cfg.num_urllc_users)
+            self.embb_selected_uavs = np.asarray(self.best_uav_per_user[embb_start:], dtype=int).copy()
+        if self.owner_per_uav_rb is None:
+            self.owner_per_uav_rb = np.full(
+                (int(self.sys_cfg.num_uavs), int(self.sys_cfg.num_subcarriers)),
+                -1,
+                dtype=int,
+            )
+            if getattr(self, "allocator", None) is not None:
+                self.allocator.embb_owner_per_uav_rb = np.asarray(self.owner_per_uav_rb, dtype=int).copy()
         rb = self._current_planning_rb()
         learn_phase0_embb_power = bool(getattr(self.rl_cfg.env, "learn_phase0_embb_power", True))
         guard_stats = {
@@ -1439,6 +1543,7 @@ class SRMAPPOPhaseAEnv:
             "power_ceiling_violation": 0.0,
             "guard_violation": 0.0,
         }
+        positive_phase0_power_delta_norm_sum = 0.0
         planning_owner_decode_info: Dict[str, Dict[str, float]] = {}
         for uav_idx in range(self.sys_cfg.num_uavs):
             if self.rl_cfg.env.multi_rb_agents:
@@ -1638,6 +1743,7 @@ class SRMAPPOPhaseAEnv:
                 ))
                 self.planning_embb_power_nonzero_count += int(abs(clipped_delta) > 1e-3)
                 self.planning_embb_power_changed_count += int(abs(scale - 1.0) > 1e-3)
+                positive_phase0_power_delta_norm_sum += max(clipped_delta, 0.0)
                 self.embb_power_scale[uav_idx] = scale
                 if self.embb_power_scale_per_uav_rb is not None:
                     self.embb_power_scale_per_uav_rb[uav_idx, rb] = scale
@@ -1656,17 +1762,60 @@ class SRMAPPOPhaseAEnv:
             self._finalize_embb_baseline_from_policy()
 
         reward = 0.0
+        projected_total_power = 0.0
+        planning_phase0_total_power_penalty = 0.0
+        planning_phase0_positive_power_penalty = 0.0
+        phase0_baseline_power_penalty = 0.0
+        planning_rate_delta_ratio = 0.0
+        planning_rate_reference_scale = 0.0
+        planning_reward_terms: Dict[str, float] = {}
         try:
             embb_projection = self._project_embb_baseline_from_owner_map(
                 self.owner_per_uav_rb,
                 self.embb_power_scale_per_uav_rb,
             )
             total_rate = float(embb_projection["total_rate"])
+            projected_total_power = float(embb_projection.get("total_power", 0.0))
             delta_rate = total_rate - float(self.planning_prev_total_rate)
             self.planning_prev_total_rate = total_rate
-            reward = self.rl_cfg.reward.planning_embb_rate_weight * (
-                delta_rate / max(self.rl_cfg.reward.terminal_embb_rate_normalizer, 1e-9)
+            snapshot_rate = float(getattr(self, "phase0_snapshot_embb_total_rate", 0.0) or 0.0)
+            if snapshot_rate > 1.0e-9:
+                planning_rate_reference_scale = snapshot_rate
+            else:
+                planning_rate_reference_scale = float(
+                    max(self.rl_cfg.reward.terminal_embb_rate_normalizer, 1.0e-9)
+                )
+            planning_rate_delta_ratio = float(delta_rate / max(planning_rate_reference_scale, 1.0e-9))
+            planning_rate_reward = self.rl_cfg.reward.planning_embb_rate_weight * (
+                planning_rate_delta_ratio
             )
+            phase0_total_power_penalty_weight = float(
+                getattr(self.rl_cfg.reward, "planning_phase0_total_power_penalty_weight", 0.0) or 0.0
+            )
+            if phase0_total_power_penalty_weight > 0.0:
+                phase0_total_power_budget = (
+                    float(self.sys_cfg.num_uavs)
+                    * float(self.sys_cfg.num_subcarriers)
+                    * float(getattr(self.algo_cfg, "power_upper_bound", 0.0) or 0.0)
+                )
+                projected_power_norm = projected_total_power / max(phase0_total_power_budget, 1e-9)
+                planning_phase0_total_power_penalty = phase0_total_power_penalty_weight * projected_power_norm
+
+            phase0_positive_power_penalty_weight = float(
+                getattr(self.rl_cfg.reward, "planning_phase0_positive_power_delta_penalty_weight", 0.0) or 0.0
+            )
+            if phase0_positive_power_penalty_weight > 0.0 and positive_phase0_power_delta_norm_sum > 0.0:
+                positive_delta_norm_mean = positive_phase0_power_delta_norm_sum / max(float(self.sys_cfg.num_uavs), 1.0)
+                planning_phase0_positive_power_penalty = (
+                    phase0_positive_power_penalty_weight * positive_delta_norm_mean
+                )
+            phase0_baseline_power_penalty = -float(
+                planning_phase0_total_power_penalty + planning_phase0_positive_power_penalty
+            )
+            planning_reward_terms["planning_embb_rate_delta_reward"] = float(planning_rate_reward)
+            if abs(phase0_baseline_power_penalty) > 1.0e-12:
+                planning_reward_terms["phase0_baseline_power_penalty"] = float(phase0_baseline_power_penalty)
+            reward = float(sum(planning_reward_terms.values()))
         except Exception:
             reward = 0.0
 
@@ -1682,6 +1831,15 @@ class SRMAPPOPhaseAEnv:
                 "planning_phase": True,
                 "planning_rb": float(rb),
                 "planning_reward": float(reward),
+                "reward_terms": dict(planning_reward_terms),
+                "planning_projected_embb_total_power": float(projected_total_power),
+                "planning_rate_delta_ratio": float(planning_rate_delta_ratio),
+                "planning_rate_reference_scale": float(planning_rate_reference_scale),
+                "planning_phase0_total_power_penalty": float(planning_phase0_total_power_penalty),
+                "planning_phase0_positive_power_penalty": float(planning_phase0_positive_power_penalty),
+                "planning_positive_power_delta_norm_mean": float(
+                    positive_phase0_power_delta_norm_sum / max(float(self.sys_cfg.num_uavs), 1.0)
+                ),
                 "planning_owner_change_count": float(guard_stats["owner_change_count"]),
                 "planning_owner_change_ratio": float(guard_stats["owner_change_ratio"]),
                 "planning_owner_rewrite_count": float(guard_stats["rewrite_count"]),
@@ -2020,6 +2178,7 @@ class SRMAPPOPhaseAEnv:
                 else None
             )
         )
+
         self._nested_canonical_em_order_cache = (
             np.asarray(shared_em_order_across_loads, dtype=np.int32).copy()
             if isinstance(shared_em_order_across_loads, np.ndarray)
@@ -2666,7 +2825,6 @@ class SRMAPPOPhaseAEnv:
             return np.asarray(best_ids, dtype=int)
 
         def _nested_user_indices() -> np.ndarray:
-            nonlocal cached_ur_order, cached_em_order
             if not nested_enabled:
                 return np.arange(int(total_users), dtype=int)
             if fixed_nested_subset and not embb_fixed_prefix_only_mode:
@@ -3168,6 +3326,8 @@ class SRMAPPOPhaseAEnv:
         self.guardrail_resample_count = float(rejected)
         self.best_uav_per_user = np.asarray(association, dtype=int).copy()
         self.channel_gains_mag_sq = np.asarray(selected_mag_sq, dtype=float).copy()
+        self._episode_association_cache = np.asarray(self.best_uav_per_user, dtype=int).copy()
+        self._episode_channel_gains_cache = np.asarray(self.channel_gains_mag_sq, dtype=float).copy()
         self.last_topology = deepcopy(selected_topology)
         if freeze_assoc:
             self._fixed_association_cache = np.asarray(self.best_uav_per_user, dtype=int).copy()
@@ -3317,6 +3477,8 @@ class SRMAPPOPhaseAEnv:
             self.embb_selected_uavs = embb_result["best_uav_per_user"].copy()
             self.embb_base_rb_rates = self.allocator.embb_base_rb_rates.copy()
             self.embb_base_rb_rates_per_uav_rb = self.allocator.embb_base_rb_rates_per_uav_rb.copy()
+            if bool(getattr(self.rl_cfg.env, "apply_partial_reuse_to_fixed_baseline_state", False)):
+                self._apply_partial_reuse_to_baseline_state()
             self.embb_owner_grid = np.repeat(
                 self.owner_per_uav_rb[:, :, None],
                 self.sys_cfg.num_minislots,
@@ -3487,10 +3649,37 @@ class SRMAPPOPhaseAEnv:
         self.puncture_counts = np.zeros(self.sys_cfg.num_uavs, dtype=int)
         self.scheduled_counts = np.zeros(self.sys_cfg.num_uavs, dtype=int)
         self.selected_overlay_retentions = []
+        self.selected_overlay_reliabilities = []
+        self.selected_puncture_reliabilities = []
+        self.selected_overlay_reliability_margins = []
+        self.selected_puncture_reliability_margins = []
+        self.selected_overlay_sic_margins = []
+        self.selected_overlay_urllc_powers = []
+        self.selected_puncture_urllc_powers = []
+        self.selected_overlay_total_powers = []
+        self.selected_puncture_total_powers = []
+        self.selected_puncture_retentions = []
+        self.selected_overlay_embb_owner_rates_after = []
+        self.selected_puncture_embb_owner_rates_after = []
+        self.selected_overlay_embb_owner_minrate_margins = []
+        self.selected_puncture_embb_owner_minrate_margins = []
+        self.selected_overlay_embb_owner_minrate_ok = []
+        self.selected_puncture_embb_owner_minrate_ok = []
+        self.selected_overlay_embb_owner_service_ok = []
+        self.selected_puncture_embb_owner_service_ok = []
         self.selected_puncture_losses = []
         self.selected_overlay_losses = []
+        self.enable_mode_downstream_logging = bool(getattr(self, "enable_mode_downstream_logging", False))
+        self.mode_downstream_horizons = tuple(getattr(self, "mode_downstream_horizons", (5, 10)) or (5, 10))
+        self.mode_downstream_trajectory = []
+        self.mode_downstream_anchors = []
         self.overlay_candidate_pairs = 0
         self.overlay_feasible_pairs = 0
+        self.puncture_feasible_pairs = 0
+        self.both_feasible_pairs = 0
+        self.overlay_only_feasible_pairs = 0
+        self.puncture_only_feasible_pairs = 0
+        self.neither_feasible_pairs = 0
         self.overlay_selected_pairs = 0
         self.phase_a_feasible_candidate_pairs = 0
         self.overlay_success_ema = np.zeros(self.sys_cfg.num_uavs, dtype=float)
@@ -3528,6 +3717,42 @@ class SRMAPPOPhaseAEnv:
         except Exception:
             self.audit_urllc_global_ids_per_uav = [[] for _ in range(int(self.sys_cfg.num_uavs))]
             self.audit_embb_global_ids_per_uav = [[] for _ in range(int(self.sys_cfg.num_uavs))]
+
+    def _partial_reuse_allowed_rb_mask(self) -> Optional[np.ndarray]:
+        enabled = str(os.getenv("SR_MAPPO_ENABLE_PARTIAL_REUSE", "0") or "0").strip().lower() in {"1", "true", "yes", "on"}
+        if not enabled:
+            return None
+        pattern = str(os.getenv("SR_MAPPO_PARTIAL_REUSE_PATTERN", "staggered_3uav_12rb") or "staggered_3uav_12rb").strip().lower()
+        num_uavs = int(self.sys_cfg.num_uavs)
+        num_rbs = int(self.sys_cfg.num_subcarriers)
+        if pattern == "staggered_3uav_12rb" and num_uavs == 3 and num_rbs == 12:
+            mask = np.zeros((num_uavs, num_rbs), dtype=bool)
+            mask[0, 0:8] = True
+            mask[1, 2:10] = True
+            mask[2, 4:12] = True
+            return mask
+        return None
+
+    def _apply_partial_reuse_to_baseline_state(self) -> None:
+        allowed_mask = self._partial_reuse_allowed_rb_mask()
+        if allowed_mask is None or self.owner_per_uav_rb is None:
+            return
+        if self.owner_per_uav_rb.shape != allowed_mask.shape:
+            return
+        disallowed = ~allowed_mask
+        self.owner_per_uav_rb = np.asarray(self.owner_per_uav_rb, dtype=int).copy()
+        self.owner_per_uav_rb[disallowed] = -1
+        if self.embb_base_rb_rates_per_uav_rb is not None and self.embb_base_rb_rates_per_uav_rb.shape == allowed_mask.shape:
+            self.embb_base_rb_rates_per_uav_rb = np.asarray(self.embb_base_rb_rates_per_uav_rb, dtype=float).copy()
+            self.embb_base_rb_rates_per_uav_rb[disallowed] = 0.0
+        if self.allocator.embb_owner_per_uav_rb is not None and self.allocator.embb_owner_per_uav_rb.shape == allowed_mask.shape:
+            self.allocator.embb_owner_per_uav_rb = np.asarray(self.owner_per_uav_rb, dtype=int).copy()
+        if (
+            self.allocator.embb_base_rb_rates_per_uav_rb is not None
+            and self.embb_base_rb_rates_per_uav_rb is not None
+            and self.allocator.embb_base_rb_rates_per_uav_rb.shape == allowed_mask.shape
+        ):
+            self.allocator.embb_base_rb_rates_per_uav_rb = np.asarray(self.embb_base_rb_rates_per_uav_rb, dtype=float).copy()
 
     def _reset_episode_state(self) -> None:
         self.current_cell_index = 0
@@ -3582,6 +3807,7 @@ class SRMAPPOPhaseAEnv:
         self._phase0_baseline_cache_hit_count = 0
         self._phase0_baseline_cache_total_count = 0
         self._urllc_packet_base_cache = {}
+        self._urllc_packet_base_cache_cell_index = -1
         # Snapshot leakage runtime flags (diagnostics only).
         self.owner_init_from_snapshot = False
         self.owner_snapshot_fallback_taken = False
@@ -3609,10 +3835,37 @@ class SRMAPPOPhaseAEnv:
         self.puncture_counts = np.zeros(self.sys_cfg.num_uavs, dtype=int)
         self.scheduled_counts = np.zeros(self.sys_cfg.num_uavs, dtype=int)
         self.selected_overlay_retentions = []
+        self.selected_overlay_reliabilities = []
+        self.selected_puncture_reliabilities = []
+        self.selected_overlay_reliability_margins = []
+        self.selected_puncture_reliability_margins = []
+        self.selected_overlay_sic_margins = []
+        self.selected_overlay_urllc_powers = []
+        self.selected_puncture_urllc_powers = []
+        self.selected_overlay_total_powers = []
+        self.selected_puncture_total_powers = []
+        self.selected_puncture_retentions = []
+        self.selected_overlay_embb_owner_rates_after = []
+        self.selected_puncture_embb_owner_rates_after = []
+        self.selected_overlay_embb_owner_minrate_margins = []
+        self.selected_puncture_embb_owner_minrate_margins = []
+        self.selected_overlay_embb_owner_minrate_ok = []
+        self.selected_puncture_embb_owner_minrate_ok = []
+        self.selected_overlay_embb_owner_service_ok = []
+        self.selected_puncture_embb_owner_service_ok = []
         self.selected_puncture_losses = []
         self.selected_overlay_losses = []
+        self.enable_mode_downstream_logging = bool(getattr(self, "enable_mode_downstream_logging", False))
+        self.mode_downstream_horizons = tuple(getattr(self, "mode_downstream_horizons", (5, 10)) or (5, 10))
+        self.mode_downstream_trajectory = []
+        self.mode_downstream_anchors = []
         self.overlay_candidate_pairs = 0
         self.overlay_feasible_pairs = 0
+        self.puncture_feasible_pairs = 0
+        self.both_feasible_pairs = 0
+        self.overlay_only_feasible_pairs = 0
+        self.puncture_only_feasible_pairs = 0
+        self.neither_feasible_pairs = 0
         self.overlay_selected_pairs = 0
         self.phase_a_feasible_candidate_pairs = 0
         self.overlay_success_ema = np.zeros(self.sys_cfg.num_uavs, dtype=float)
@@ -3904,6 +4157,8 @@ class SRMAPPOPhaseAEnv:
         self.mode_balance_puncture_chosen_when_good_overlay_count = 0
         self.mode_balance_selected_overlay_cost_values = []
         self.mode_balance_selected_puncture_cost_values = []
+        self.overlay_chosen_when_both_feasible_count = 0
+        self.puncture_chosen_when_both_feasible_count = 0
         self.overlay_chosen_when_safe_puncture_available_count = 0
         self.puncture_chosen_when_safe_puncture_available_count = 0
         # v5 puncture-recovery diagnostics.
@@ -4032,12 +4287,22 @@ class SRMAPPOPhaseAEnv:
         # Some newer scenario-generation paths no longer materialize
         # per_uav_associated_{embb,urllc}. Reconstruct them from selected-UAV arrays
         # so greedy terminal reference caching still works.
-        embb_assoc = np.asarray(getattr(self, "embb_selected_uavs", np.array([], dtype=int)), dtype=int)
+        embb_selected = getattr(self, "embb_selected_uavs", None)
+        embb_assoc = (
+            np.asarray(embb_selected, dtype=int)
+            if embb_selected is not None
+            else np.array([], dtype=int)
+        )
         self.per_uav_associated_embb = [
             np.where(embb_assoc == uav_idx)[0].astype(int)
             for uav_idx in range(int(self.sys_cfg.num_uavs))
         ]
-        urllc_assoc = np.asarray(getattr(self, "best_uav_per_user", np.array([], dtype=int)), dtype=int)
+        best_uav_per_user = getattr(self, "best_uav_per_user", None)
+        urllc_assoc = (
+            np.asarray(best_uav_per_user, dtype=int)
+            if best_uav_per_user is not None
+            else np.array([], dtype=int)
+        )
         urllc_assoc = urllc_assoc[: int(self.sys_cfg.num_urllc_users)] if urllc_assoc.size > 0 else np.array([], dtype=int)
         self.per_uav_associated_urllc = [
             np.where(urllc_assoc == uav_idx)[0].astype(int)
@@ -4137,11 +4402,23 @@ class SRMAPPOPhaseAEnv:
             np.asarray(power_scale_per_uav_rb, dtype=float)
             if power_scale_per_uav_rb is not None else None
         )
-        best_uav_per_user = (
-            np.asarray(self.embb_selected_uavs, dtype=int)
-            if self.embb_selected_uavs is not None else
-            np.asarray(self.best_uav_per_user[self.sys_cfg.num_urllc_users:], dtype=int)
-        )
+        channel_gains_mag_sq = self.channel_gains_mag_sq
+        if channel_gains_mag_sq is None:
+            episode_channel = getattr(self, "_episode_channel_gains_cache", None)
+            if episode_channel is not None:
+                channel_gains_mag_sq = np.asarray(episode_channel, dtype=float)
+                self.channel_gains_mag_sq = np.asarray(channel_gains_mag_sq, dtype=float).copy()
+        if channel_gains_mag_sq is None:
+            cached_channel = getattr(self, "_fixed_channel_gains_cache", None)
+            if cached_channel is not None:
+                channel_gains_mag_sq = np.asarray(cached_channel, dtype=float)
+                self.channel_gains_mag_sq = np.asarray(channel_gains_mag_sq, dtype=float).copy()
+        if self.embb_selected_uavs is not None:
+            best_uav_per_user = np.asarray(self.embb_selected_uavs, dtype=int)
+        elif self.best_uav_per_user is not None:
+            best_uav_per_user = np.asarray(self.best_uav_per_user[self.sys_cfg.num_urllc_users:], dtype=int)
+        else:
+            best_uav_per_user = np.zeros(num_embb, dtype=int)
         for embb_idx in range(num_embb):
             power_limit_idx = min(embb_idx, len(self.embb_cfg.power_limits) - 1)
             max_power_per_user[embb_idx] = min(
@@ -4163,7 +4440,7 @@ class SRMAPPOPhaseAEnv:
 
         embb_state = self.allocator._compute_embb_state(
             embb_rb_alloc,
-            self.channel_gains_mag_sq,
+            channel_gains_mag_sq,
             best_uav_per_user,
             embb_tx_powers,
         )
@@ -5856,6 +6133,80 @@ class SRMAPPOPhaseAEnv:
             if not np.any(packet_mask[MODE_PUNCTURE, 1:] > 0.5):
                 mode_mask[MODE_PUNCTURE] = 0.0
 
+        # Structural high-load overlay guard:
+        # when puncture is feasible, do not let overlay remain the default
+        # admission path unless the overlay candidate is clearly superior on the
+        # local physical metrics. This turns the desired puncture-dominant
+        # stress behavior into a mask-time rule instead of a soft preference.
+        if (
+            bool(getattr(self.rl_cfg.env, "enable_overlay_dominance_guard", False))
+            and uav_idx is not None
+            and rb is not None
+            and minislot is not None
+            and candidates
+        ):
+            actual_load = float(self._current_actual_load())
+            load_floor = float(getattr(self.rl_cfg.env, "overlay_dominance_guard_load_floor", 0.0) or 0.0)
+            if actual_load >= load_floor - 1.0e-9:
+                puncture_options = [idx for idx in range(1, len(candidates) + 1) if packet_mask[MODE_PUNCTURE, idx] > 0.5]
+                overlay_options = [idx for idx in range(1, len(candidates) + 1) if packet_mask[MODE_OVERLAY, idx] > 0.5]
+                if puncture_options and overlay_options:
+                    min_overlay_retention = float(
+                        getattr(self.rl_cfg.env, "overlay_dominance_guard_min_overlay_retention", 0.0) or 0.0
+                    )
+                    max_overlay_vs_puncture_cost_ratio = float(
+                        getattr(
+                            self.rl_cfg.env,
+                            "overlay_dominance_guard_max_overlay_vs_puncture_intercell_ratio",
+                            1.0,
+                        ) or 1.0
+                    )
+                    max_overlay_vs_puncture_cost_ratio = float(max(max_overlay_vs_puncture_cost_ratio, 0.0))
+
+                    puncture_costs: Dict[int, float] = {}
+                    for idx in puncture_options:
+                        try:
+                            puncture_costs[idx] = float(
+                                self._estimate_candidate_action_intercell_cost_after_source_mask(
+                                    int(uav_idx),
+                                    int(rb),
+                                    int(minislot),
+                                    candidates[idx - 1],
+                                    MODE_PUNCTURE,
+                                )
+                            )
+                        except Exception:
+                            puncture_costs[idx] = float("inf")
+                    safe_puncture_cost = min(puncture_costs.values()) if puncture_costs else float("inf")
+
+                    for idx in overlay_options:
+                        candidate = candidates[idx - 1]
+                        keep_overlay = float(getattr(candidate, "overlay_retention", 0.0) or 0.0) >= (
+                            min_overlay_retention - 1.0e-12
+                        )
+                        if keep_overlay and np.isfinite(safe_puncture_cost):
+                            try:
+                                overlay_cost = float(
+                                    self._estimate_candidate_action_intercell_cost_after_source_mask(
+                                        int(uav_idx),
+                                        int(rb),
+                                        int(minislot),
+                                        candidate,
+                                        MODE_OVERLAY,
+                                    )
+                                )
+                            except Exception:
+                                overlay_cost = float("inf")
+                            keep_overlay = bool(
+                                np.isfinite(overlay_cost)
+                                and overlay_cost <= safe_puncture_cost * max_overlay_vs_puncture_cost_ratio + 1.0e-12
+                            )
+                        if not keep_overlay:
+                            packet_mask[MODE_OVERLAY, idx] = 0.0
+
+                    if not np.any(packet_mask[MODE_OVERLAY, 1:] > 0.5):
+                        mode_mask[MODE_OVERLAY] = 0.0
+
         has_feasible_admit = bool(
             np.any(packet_mask[MODE_OVERLAY, 1:] > 0.5)
             or np.any(packet_mask[MODE_PUNCTURE, 1:] > 0.5)
@@ -5979,14 +6330,58 @@ class SRMAPPOPhaseAEnv:
         return int(urgent_packets)
 
     def _rb_summary_feature_dim(self) -> int:
+        if not bool(getattr(self.rl_cfg.env, "include_rb_summary_observation", True)):
+            return 0
         return 9 * self.sys_cfg.num_subcarriers
 
-    def _rb_summary_block(self, uav_idx: int, rb: int, minislot: int) -> List[float]:
+    def _rb_summary_block(
+        self,
+        uav_idx: int,
+        rb: int,
+        minislot: int,
+        preselected_candidates: Optional[List[CandidatePacket]] = None,
+    ) -> List[float]:
         owner = int(self.owner_per_uav_rb[uav_idx, rb]) if self.owner_per_uav_rb is not None else -1
         base_rate = self._base_rate_for_cell(uav_idx, owner, rb)
         min_rate = float(getattr(self.embb_cfg, "min_rate_per_user_bps", 0.0))
         target_per_rb = min_rate / max(self.sys_cfg.num_subcarriers, 1)
         min_rate_margin = (base_rate - target_per_rb) / max(target_per_rb, 1e-9) if target_per_rb > 0.0 else 0.0
+        packet_norm = max(self.num_packets, 1)
+
+        if bool(getattr(self.rl_cfg.env, "simplified_rb_summary_observation", False)):
+            candidates = list(preselected_candidates or [])
+            overlay_candidates = [candidate for candidate in candidates if candidate.overlay_feasible]
+            puncture_candidates = [candidate for candidate in candidates if candidate.puncture_feasible]
+            best_overlay_utility = max((candidate.overlay_utility for candidate in overlay_candidates), default=0.0)
+            best_puncture_utility = max((candidate.puncture_utility for candidate in puncture_candidates), default=0.0)
+            best_overlay_retention = max((candidate.overlay_retention for candidate in overlay_candidates), default=0.0)
+            best_puncture_loss = min((candidate.puncture_loss for candidate in puncture_candidates), default=0.0)
+            urgent_estimate = 0.0
+            if candidates:
+                max_latency = float(getattr(self.urllc_cfg, "max_latency_minislots", self.sys_cfg.num_minislots))
+                urgent_count = 0
+                seen_packet_ids: set[int] = set()
+                for candidate in candidates:
+                    packet_id = int(candidate.packet_id)
+                    if packet_id in seen_packet_ids:
+                        continue
+                    seen_packet_ids.add(packet_id)
+                    release = int(self.packet_release_minislots[packet_id]) if packet_id < self.packet_release_minislots.size else 0
+                    age = max(minislot - release, 0)
+                    if age >= max_latency - 1:
+                        urgent_count += 1
+                urgent_estimate = float(urgent_count) / packet_norm
+            return [
+                base_rate / 1.0e7,
+                len(overlay_candidates) / packet_norm,
+                len(puncture_candidates) / packet_norm,
+                np.clip(best_overlay_utility / 1.0e6, -10.0, 10.0),
+                np.clip(best_puncture_utility / 1.0e6, -10.0, 10.0),
+                float(np.clip(best_overlay_retention, 0.0, 1.0)),
+                best_puncture_loss / 1.0e7,
+                urgent_estimate,
+                float(np.clip(min_rate_margin, -1.0, 1.0)),
+            ]
 
         raw_candidates = self._enumerate_candidates_for_cell(uav_idx, rb, minislot)
         summary_candidates = self._apply_low_damage_candidate_constraints(
@@ -6012,7 +6407,6 @@ class SRMAPPOPhaseAEnv:
             if age >= max_latency - 1:
                 urgent_packet_ids.add(packet_id)
 
-        packet_norm = max(self.num_packets, 1)
         return [
             base_rate / 1.0e7,
             len(overlay_candidates) / packet_norm,
@@ -6025,7 +6419,15 @@ class SRMAPPOPhaseAEnv:
             float(np.clip(min_rate_margin, -1.0, 1.0)),
         ]
 
-    def _build_minislot_rb_summary_features(self, uav_idx: int, minislot: int) -> List[float]:
+    def _build_minislot_rb_summary_features(
+        self,
+        uav_idx: int,
+        minislot: int,
+        current_rb: Optional[int] = None,
+        current_candidates: Optional[List[CandidatePacket]] = None,
+    ) -> List[float]:
+        if self._rb_summary_feature_dim() <= 0:
+            return []
         cache_key = (int(self.current_cell_index), int(uav_idx), int(minislot))
         cached = self._rb_summary_cache.get(cache_key)
         if cached is not None:
@@ -6033,7 +6435,8 @@ class SRMAPPOPhaseAEnv:
 
         features: List[float] = []
         for summary_rb in range(self.sys_cfg.num_subcarriers):
-            features.extend(self._rb_summary_block(uav_idx, summary_rb, minislot))
+            preselected = current_candidates if (current_rb is not None and int(summary_rb) == int(current_rb)) else None
+            features.extend(self._rb_summary_block(uav_idx, summary_rb, minislot, preselected_candidates=preselected))
         self._rb_summary_cache[cache_key] = tuple(features)
         return features
 
@@ -6088,7 +6491,14 @@ class SRMAPPOPhaseAEnv:
         missing = self.rl_cfg.action.max_candidate_packets - len(candidates)
         for _ in range(missing):
             features.extend([0.0] * 16)
-        features.extend(self._build_minislot_rb_summary_features(uav_idx, minislot))
+        features.extend(
+            self._build_minislot_rb_summary_features(
+                uav_idx,
+                minislot,
+                current_rb=rb,
+                current_candidates=candidates,
+            )
+        )
         return np.asarray(features, dtype=np.float32)
 
     def _build_global_obs(self, rb: int, minislot: int) -> np.ndarray:
@@ -6209,6 +6619,69 @@ class SRMAPPOPhaseAEnv:
             packet_iter = list(packet_iter)[:max_packet_candidates]
         intercell_punct = self._compute_intercell_interference(uav_idx, rb, minislot)
         overlay_owner_candidates = self._overlay_owner_candidates_for_cell(uav_idx)
+        requested_mix_ratio_local = float(getattr(self.sim_cfg, "urllc_user_ratio", 0.0) or 0.0)
+        actual_load_local = float(self._current_actual_load())
+        try:
+            req07_custom_enabled = str(
+                os.getenv("SR_MAPPO_OWNER_TOPK_REQ07_ENABLE", "0") or "0"
+            ).strip().lower() in {"1", "true", "yes", "on"}
+        except Exception:
+            req07_custom_enabled = False
+        try:
+            req07_load_start = float(
+                str(os.getenv("SR_MAPPO_OWNER_TOPK_REQ07_LOAD_START", "15") or "15").strip()
+            )
+        except Exception:
+            req07_load_start = 15.0
+        try:
+            req07_load_end = float(
+                str(os.getenv("SR_MAPPO_OWNER_TOPK_REQ07_LOAD_END", "18") or "18").strip()
+            )
+        except Exception:
+            req07_load_end = 18.0
+        try:
+            req07_puncture_rel_margin = float(
+                str(os.getenv("SR_MAPPO_OWNER_TOPK_REQ07_PUNCTURE_REL_MARGIN", "0.03") or "0.03").strip()
+            )
+        except Exception:
+            req07_puncture_rel_margin = 0.03
+        try:
+            req07_gain_ratio_margin = float(
+                str(os.getenv("SR_MAPPO_OWNER_TOPK_REQ07_GAIN_RATIO_MARGIN", "0.05") or "0.05").strip()
+            )
+        except Exception:
+            req07_gain_ratio_margin = 0.05
+        try:
+            req07_overlay_rel_margin = float(
+                str(os.getenv("SR_MAPPO_OWNER_TOPK_REQ07_OVERLAY_REL_MARGIN", "0.02") or "0.02").strip()
+            )
+        except Exception:
+            req07_overlay_rel_margin = 0.02
+        req07_puncture_rel_margin = float(np.clip(req07_puncture_rel_margin, 0.0, 0.25))
+        req07_gain_ratio_margin = float(np.clip(req07_gain_ratio_margin, 0.0, 0.50))
+        req07_overlay_rel_margin = float(np.clip(req07_overlay_rel_margin, 0.0, 0.25))
+        req07_candidate_relax_active = bool(
+            req07_custom_enabled
+            and abs(float(requested_mix_ratio_local) - 0.7) <= 1.0e-6
+            and float(actual_load_local) >= float(req07_load_start)
+            and float(actual_load_local) <= float(req07_load_end)
+        )
+        try:
+            greedy_puncture_rel_margin = float(
+                str(os.getenv("SR_MAPPO_GREEDY_PUNCTURE_REL_MARGIN", "0.0") or "0.0").strip()
+            )
+        except Exception:
+            greedy_puncture_rel_margin = 0.0
+        greedy_puncture_rel_margin = float(np.clip(greedy_puncture_rel_margin, 0.0, 0.25))
+        puncture_rel_margin_total = float(greedy_puncture_rel_margin + (req07_puncture_rel_margin if req07_candidate_relax_active else 0.0))
+        puncture_rel_margin_total = float(np.clip(puncture_rel_margin_total, 0.0, 0.25))
+        puncture_reliability_target = float(
+            np.clip((1.0 - float(self.urllc_cfg.target_error_probability)) - puncture_rel_margin_total, 0.0, 1.0)
+        )
+        cache_cell_index = int(self.current_cell_index)
+        if int(getattr(self, "_urllc_packet_base_cache_cell_index", -1)) != cache_cell_index:
+            self._urllc_packet_base_cache.clear()
+            self._urllc_packet_base_cache_cell_index = cache_cell_index
         # Parse once per cell (instead of once per packet).
         sic_pairing_prior_enabled = bool(
             str(os.getenv("SR_MAPPO_GREEDY_HF_SIC_PAIRING_PRIOR", "0") or "0").strip().lower()
@@ -6254,68 +6727,8 @@ class SRMAPPOPhaseAEnv:
             urllc_gain = float(self.channel_gains_mag_sq[source_user, uav_idx, rb])
             if urllc_gain <= 1e-12:
                 continue
-            requested_mix_ratio_local = float(getattr(self.sim_cfg, "urllc_user_ratio", 0.0) or 0.0)
-            actual_load_local = float(self._current_actual_load())
-            try:
-                req07_custom_enabled = str(
-                    os.getenv("SR_MAPPO_OWNER_TOPK_REQ07_ENABLE", "0") or "0"
-                ).strip().lower() in {"1", "true", "yes", "on"}
-            except Exception:
-                req07_custom_enabled = False
-            try:
-                req07_load_start = float(
-                    str(os.getenv("SR_MAPPO_OWNER_TOPK_REQ07_LOAD_START", "15") or "15").strip()
-                )
-            except Exception:
-                req07_load_start = 15.0
-            try:
-                req07_load_end = float(
-                    str(os.getenv("SR_MAPPO_OWNER_TOPK_REQ07_LOAD_END", "18") or "18").strip()
-                )
-            except Exception:
-                req07_load_end = 18.0
-            try:
-                req07_puncture_rel_margin = float(
-                    str(os.getenv("SR_MAPPO_OWNER_TOPK_REQ07_PUNCTURE_REL_MARGIN", "0.03") or "0.03").strip()
-                )
-            except Exception:
-                req07_puncture_rel_margin = 0.03
-            try:
-                req07_gain_ratio_margin = float(
-                    str(os.getenv("SR_MAPPO_OWNER_TOPK_REQ07_GAIN_RATIO_MARGIN", "0.05") or "0.05").strip()
-                )
-            except Exception:
-                req07_gain_ratio_margin = 0.05
-            try:
-                req07_overlay_rel_margin = float(
-                    str(os.getenv("SR_MAPPO_OWNER_TOPK_REQ07_OVERLAY_REL_MARGIN", "0.02") or "0.02").strip()
-                )
-            except Exception:
-                req07_overlay_rel_margin = 0.02
-            req07_puncture_rel_margin = float(np.clip(req07_puncture_rel_margin, 0.0, 0.25))
-            req07_gain_ratio_margin = float(np.clip(req07_gain_ratio_margin, 0.0, 0.50))
-            req07_overlay_rel_margin = float(np.clip(req07_overlay_rel_margin, 0.0, 0.25))
-            req07_candidate_relax_active = bool(
-                req07_custom_enabled
-                and abs(float(requested_mix_ratio_local) - 0.7) <= 1.0e-6
-                and float(actual_load_local) >= float(req07_load_start)
-                and float(actual_load_local) <= float(req07_load_end)
-            )
-            try:
-                greedy_puncture_rel_margin = float(
-                    str(os.getenv("SR_MAPPO_GREEDY_PUNCTURE_REL_MARGIN", "0.0") or "0.0").strip()
-                )
-            except Exception:
-                greedy_puncture_rel_margin = 0.0
-            greedy_puncture_rel_margin = float(np.clip(greedy_puncture_rel_margin, 0.0, 0.25))
-            puncture_rel_margin_total = float(greedy_puncture_rel_margin + (req07_puncture_rel_margin if req07_candidate_relax_active else 0.0))
-            puncture_rel_margin_total = float(np.clip(puncture_rel_margin_total, 0.0, 0.25))
-            puncture_reliability_target = float(
-                np.clip((1.0 - float(self.urllc_cfg.target_error_probability)) - puncture_rel_margin_total, 0.0, 1.0)
-            )
-
             cache_key = (
-                int(self.current_cell_index),
+                cache_cell_index,
                 int(uav_idx),
                 int(rb),
                 int(minislot),
@@ -7109,6 +7522,11 @@ class SRMAPPOPhaseAEnv:
         mode_anchor_active = bool(safe_puncture_available)
         if both_modes_feasible_available:
             self.both_modes_feasible_count += 1
+            chosen_mode = int(shielded_action.action.mode)
+            if chosen_mode == MODE_OVERLAY:
+                self.overlay_chosen_when_both_feasible_count += 1
+            elif chosen_mode == MODE_PUNCTURE:
+                self.puncture_chosen_when_both_feasible_count += 1
         if safe_puncture_available:
             self.safe_puncture_available_count += 1
             chosen_mode = int(shielded_action.action.mode)
@@ -7121,7 +7539,7 @@ class SRMAPPOPhaseAEnv:
             if int(shielded_action.action.mode) == MODE_PUNCTURE:
                 self.teacher_mode_agreement_count += 1
         phase_a_power_info = dict(getattr(shielded_action, "phase_a_embb_power_info", {}) or {})
-        if self.rl_cfg.env.learn_embb_baseline and self._phase_a_embb_power_runtime_enabled():
+        if self._phase_a_embb_power_runtime_enabled():
             self.phase_a_embb_power_invalid_or_masked_count += int(bool(phase_a_power_info.get("invalid_or_masked", False)))
             # Suppress-reason accounting MUST be per executed decision (denominator=`phase_a_total_decisions`).
             # Do not increment these counters inside the sanitizer, because the sanitizer may be invoked more than
@@ -7243,7 +7661,7 @@ class SRMAPPOPhaseAEnv:
             if self.owner_per_uav_rb is not None:
                 embb_owner = int(self.owner_per_uav_rb[uav_idx, rb])
             self.embb_owner_grid[uav_idx, rb, minislot] = int(embb_owner)
-            if self.rl_cfg.env.learn_embb_baseline and bool(self._phase_a_embb_power_runtime_enabled()):
+            if bool(self._phase_a_embb_power_runtime_enabled()):
                 allow_phase_a_power_on_keep = bool(getattr(self.rl_cfg.env, "allow_phase_a_power_on_keep", False))
                 if allow_phase_a_power_on_keep:
                     self.phase_a_keep_power_write_attempt_count += 1
@@ -7374,6 +7792,7 @@ class SRMAPPOPhaseAEnv:
                 else:
                     self.phase_a_power_zeroed_non_admission_count += 1
                     shielded_action.action.embb_power_delta = 0.0
+            self._record_mode_downstream_step(int(shielded_action.action.mode))
             return {
                 "mode": chosen_mode_name,
                 "scheduled_packet": scheduled_packet,
@@ -7695,6 +8114,14 @@ class SRMAPPOPhaseAEnv:
         self.scheduled_reliabilities[candidate.packet_id] = float(
             self._last_joint_reliabilities.get(agent_id, candidate.reliability_for_mode(mode))
         )
+        selected_mode_stats = self._selected_mode_analysis_stats(
+            candidate=candidate,
+            mode=int(mode),
+            actual_power=float(actual_power),
+            uav_idx=int(uav_idx),
+            rb_idx=int(rb),
+            minislot=int(minislot),
+        )
         self.unscheduled_packet_ids.discard(candidate.packet_id)
         # NOTE:
         # greedy_urllc_budget_used_bps is an eMBB-loss budget tracker (global per-episode cap),
@@ -7707,12 +8134,30 @@ class SRMAPPOPhaseAEnv:
         if mode == MODE_OVERLAY:
             self.overlay_counts[uav_idx] += 1
             self.selected_overlay_retentions.append(float(candidate.overlay_retention))
+            self.selected_overlay_reliabilities.append(float(selected_mode_stats["reliability"]))
+            self.selected_overlay_reliability_margins.append(float(selected_mode_stats["reliability_margin"]))
+            self.selected_overlay_sic_margins.append(float(selected_mode_stats["sic_margin"]))
+            self.selected_overlay_urllc_powers.append(float(selected_mode_stats["urllc_power"]))
+            self.selected_overlay_total_powers.append(float(selected_mode_stats["local_total_power"]))
+            self.selected_overlay_embb_owner_rates_after.append(float(selected_mode_stats["owner_rate_after"]))
+            self.selected_overlay_embb_owner_minrate_margins.append(float(selected_mode_stats["owner_minrate_margin"]))
+            self.selected_overlay_embb_owner_minrate_ok.append(float(selected_mode_stats["owner_minrate_ok"]))
+            self.selected_overlay_embb_owner_service_ok.append(float(selected_mode_stats["owner_service_ok"]))
             self.selected_overlay_losses.append(float(candidate.overlay_loss))
             self.overlay_selected_pairs += 1
             self.overlay_success_ema[uav_idx] = 0.9 * self.overlay_success_ema[uav_idx] + 0.1 * float(candidate.overlay_retention)
             self.selected_overlay_admission_count += 1
         elif mode == MODE_PUNCTURE:
             self.puncture_counts[uav_idx] += 1
+            self.selected_puncture_reliabilities.append(float(selected_mode_stats["reliability"]))
+            self.selected_puncture_reliability_margins.append(float(selected_mode_stats["reliability_margin"]))
+            self.selected_puncture_urllc_powers.append(float(selected_mode_stats["urllc_power"]))
+            self.selected_puncture_total_powers.append(float(selected_mode_stats["local_total_power"]))
+            self.selected_puncture_retentions.append(float(selected_mode_stats["retention"]))
+            self.selected_puncture_embb_owner_rates_after.append(float(selected_mode_stats["owner_rate_after"]))
+            self.selected_puncture_embb_owner_minrate_margins.append(float(selected_mode_stats["owner_minrate_margin"]))
+            self.selected_puncture_embb_owner_minrate_ok.append(float(selected_mode_stats["owner_minrate_ok"]))
+            self.selected_puncture_embb_owner_service_ok.append(float(selected_mode_stats["owner_service_ok"]))
             self.selected_puncture_losses.append(float(candidate.puncture_loss))
             self.selected_puncture_admission_count += 1
             puncture_admission_bonus_weight = float(getattr(self.rl_cfg.reward, "puncture_admission_bonus_weight", 0.0))
@@ -7871,6 +8316,8 @@ class SRMAPPOPhaseAEnv:
                 self.high_intercell_admission_penalty_sum += float(penalty)
             # Update running baseline after applying this decision (avoid look-ahead).
             self.high_intercell_admission_budget_ema = float(beta * budget + (1.0 - beta) * float(delta_victim_intercell_after_mask))
+
+        self._record_mode_downstream_step(int(mode))
 
         return {
             "mode": chosen_mode_name,
@@ -8458,6 +8905,46 @@ class SRMAPPOPhaseAEnv:
         action, debug = self.hard_feasible_throughput_greedy_action(observation)
         tagged = dict(debug)
         tagged["greedy_policy_name"] = "force_admit_minloss_greedy"
+        return action, tagged
+
+    def pure_force_admit_globaltp_greedy_action(
+        self,
+        observation: AgentObservation,
+    ) -> Tuple[HybridAction, Dict[str, float]]:
+        """Pure-sumrate owner selection plus no-KEEP max-global-throughput admission."""
+
+        planning_phase = bool(observation.metadata.get("planning_phase", 0.0) > 0.5)
+        if planning_phase:
+            action = self._planning_owner_action_for_baseline(observation, "global_sumrate_only")
+            return action, {
+                "phase_a_decision": 0.0,
+                "noop_available": 0.0,
+                "noop_selected": 0.0,
+                "admit_selected": 0.0,
+                "overlay_selected": 0.0,
+                "puncture_selected": 0.0,
+                "selected_loss": 0.0,
+                "selected_retention": 1.0,
+                "selected_throughput": 0.0,
+                "rejected_when_noop_better": 0.0,
+                "feasible_admit_count": 0.0,
+                "no_op_better_than_best_admit": 0.0,
+                "no_op_tied_with_best_admit": 0.0,
+                "current_env_requires_feasible_admission_only": 1.0,
+                "greedy_policy_name": "pure_force_admit_globaltp_greedy",
+                "planning_owner_policy": 1.0,
+                "greedy_hf_pure_global_tp_sort": 1.0,
+            }
+
+        old_flag = bool(getattr(self, "_greedy_hf_pure_global_tp_sort", False))
+        self._greedy_hf_pure_global_tp_sort = True
+        try:
+            action, debug = self.hard_feasible_throughput_greedy_action(observation)
+        finally:
+            self._greedy_hf_pure_global_tp_sort = old_flag
+        tagged = dict(debug)
+        tagged["greedy_policy_name"] = "pure_force_admit_globaltp_greedy"
+        tagged["greedy_hf_pure_global_tp_sort"] = 1.0
         return action, tagged
 
     def myopic_throughput_greedy_action(
@@ -9528,6 +10015,10 @@ class SRMAPPOPhaseAEnv:
                 str(getattr(self.rl_cfg.env, "greedy_hf_minrate_first_loss_eps", 1.0e-9) or 1.0e-9),
             )
         )
+        pure_global_tp_sort = bool(getattr(self, "_greedy_hf_pure_global_tp_sort", False))
+        pure_global_tp_sort = pure_global_tp_sort or str(
+            os.getenv("SR_MAPPO_GREEDY_HF_PURE_GLOBAL_TP_SORT", "0") or "0"
+        ).strip().lower() in {"1", "true", "yes", "on"}
         embb_min_rate_bps = float(
             getattr(self.embb_cfg, "min_rate_per_user_bps", getattr(self.embb_cfg, "min_rate", 0.0)) or 0.0
         )
@@ -10130,7 +10621,17 @@ class SRMAPPOPhaseAEnv:
             self.greedy_hf_relaxed_candidate_total += int(
                 sum(1 for item in soft_candidates_nonshare if float(item[10]) > 1.0e-9)
             )
-            if req05_admit_transition_active:
+            if pure_global_tp_sort:
+                soft_candidates_nonshare.sort(
+                    key=lambda item: (
+                        -float(item[6]),
+                        float(item[5]),
+                        float(item[3]),
+                        -float(item[2] == MODE_OVERLAY),
+                        float(item[0]),
+                    )
+                )
+            elif req05_admit_transition_active:
                 soft_candidates_nonshare.sort(
                     key=lambda item: (
                         -float(item[11]),  # prioritize soft-feasible score first for 5:5 transition smoothing
@@ -10195,7 +10696,17 @@ class SRMAPPOPhaseAEnv:
             reject_min_rate_count += int(min_rate_viol > 1.0e-9)
             reject_share_cap_count += int(mode_viol > 1.0e-9)
         elif feasible_candidates_nonshare:
-            if req05_admit_transition_active:
+            if pure_global_tp_sort:
+                feasible_candidates_nonshare.sort(
+                    key=lambda item: (
+                        -float(item[6]),
+                        float(item[5]),
+                        float(item[3]),
+                        -float(item[2] == MODE_OVERLAY),
+                        float(item[0]),
+                    )
+                )
+            elif req05_admit_transition_active:
                 feasible_candidates_nonshare.sort(
                     key=lambda item: (
                         -float(item[6] + _overlay_reserved_rb_soft_bias(item[1], int(item[2]))),
@@ -10512,6 +11023,7 @@ class SRMAPPOPhaseAEnv:
             "current_env_requires_feasible_admission_only": 1.0,
             "greedy_policy_name": "hard_feasible_throughput_greedy",
             "greedy_requires_feasible_admission_only": 1.0,
+            "greedy_hf_pure_global_tp_sort": float(pure_global_tp_sort),
             # Explicit greedy diagnostics (per-decision; aggregated in eval/report).
             "greedy_feasible_admit_count": float(feasible_admit_count),
             "greedy_no_feasible_admit_ratio": float(feasible_admit_count <= 0),
@@ -11075,6 +11587,9 @@ class SRMAPPOPhaseAEnv:
             urllc_tx_power_penalty_scale = float(getattr(self.rl_cfg.reward, "urllc_tx_power_penalty_scale", 0.0))
             if urllc_tx_power_penalty_scale > 0.0:
                 reward_terms["urllc_tx_power_penalty"] = -urllc_tx_power_penalty_scale * power_norm
+            overlay_power_surcharge_weight = float(getattr(self.rl_cfg.reward, "overlay_power_surcharge_weight", 0.0) or 0.0)
+            if mode == MODE_OVERLAY and overlay_power_surcharge_weight > 0.0:
+                reward_terms["overlay_power_surcharge"] = -overlay_power_surcharge_weight * power_norm
 
             admitted_packet_count = 1.0
             selected_retention = self._selected_embb_retention_ratio(candidate, mode)
@@ -11238,8 +11753,24 @@ class SRMAPPOPhaseAEnv:
                     overlay_gap_norm = float(np.clip((candidate.overlay_utility - candidate.puncture_utility) / 1.0e6, 0.0, 1.0))
                     reward_terms["missed_overlay_penalty"] = -effective_missed_overlay_penalty * overlay_gap_norm
 
+            reward_terms = self._filter_reward_terms(
+                reward_terms,
+                allowed_terms=getattr(self.rl_cfg.reward, "allowed_step_reward_terms", []),
+            )
             reward = float(sum(reward_terms.values()))
             return reward, float(actual_power), reward_terms, projection_info
+
+    def _filter_reward_terms(self, reward_terms: Dict[str, float], allowed_terms: List[str]) -> Dict[str, float]:
+            if not reward_terms:
+                return {}
+            allowed = {str(item) for item in (allowed_terms or []) if str(item)}
+            if not allowed:
+                return {str(key): float(value) for key, value in reward_terms.items()}
+            return {
+                str(key): float(value)
+                for key, value in reward_terms.items()
+                if str(key) in allowed
+            }
 
     def _project_actual_power(self, required_power: float, power_delta: float, return_info: bool = False):
             raw_power_delta = float(power_delta)
@@ -11604,6 +12135,195 @@ class SRMAPPOPhaseAEnv:
             if base_rate <= 1e-9:
                 return 0.0
             return float(np.clip(1.0 - candidate.loss_for_mode(mode) / max(base_rate, 1e-9), 0.0, 1.0))
+
+    def _selected_mode_analysis_stats(
+        self,
+        candidate: CandidatePacket,
+        mode: int,
+        actual_power: float,
+        uav_idx: int,
+        rb_idx: int,
+        minislot: int,
+    ) -> Dict[str, float]:
+            target_rel = float(1.0 - self.urllc_cfg.target_error_probability)
+            reliability = float(candidate.reliability_for_mode(int(mode)))
+            reliability_margin = float(reliability - target_rel)
+            loss = float(candidate.loss_for_mode(int(mode)))
+            retention = float(self._retention_proxy_for_mode(candidate, int(mode)))
+
+            baseline_owner = int(self._baseline_embb_owner_for_cell(uav_idx, rb_idx, minislot))
+            base_rate = 0.0
+            local_embb_power_after = 0.0
+            owner_rate_after = 0.0
+            owner_service_ok = 0.0
+            owner_minrate_margin = 0.0
+            owner_minrate_ok = 0.0
+            if baseline_owner >= 0:
+                base_rate = float(self._base_rate_for_cell(uav_idx, baseline_owner, rb_idx))
+                owner_rate_after = float(max(base_rate * retention, 0.0))
+                owner_service_ok = float(owner_rate_after > 1.0e-12)
+                embb_min_rate = float(
+                    getattr(self.embb_cfg, "min_rate_per_user_bps", getattr(self.embb_cfg, "min_rate", 0.0)) or 0.0
+                )
+                target_per_rb = float(embb_min_rate / max(self.sys_cfg.num_subcarriers, 1)) if embb_min_rate > 0.0 else 0.0
+                if target_per_rb > 0.0:
+                    owner_minrate_margin = float((owner_rate_after - target_per_rb) / max(target_per_rb, 1.0e-9))
+                    owner_minrate_ok = float(owner_rate_after >= (target_per_rb - 1.0e-9))
+                if int(mode) != MODE_PUNCTURE:
+                    local_embb_power_after = float(self.allocator._get_embb_per_rb_power(baseline_owner))
+                    if self.embb_power_scale_grid is not None:
+                        local_embb_power_after *= float(self.embb_power_scale_grid[uav_idx, rb_idx, minislot])
+
+            sic_margin = 0.0
+            if int(mode) == MODE_OVERLAY:
+                pre_db = float(
+                    10.0 * np.log10(max(float(getattr(candidate, "overlay_pre_sic_snir", 0.0) or 0.0), 1.0e-15))
+                )
+                post_db = float(
+                    10.0 * np.log10(max(float(getattr(candidate, "post_sic_snir", 0.0) or 0.0), 1.0e-15))
+                )
+                sic_margin = float(
+                    min(
+                        pre_db - self.algo_cfg.embb_min_sic_snir_db,
+                        post_db - self.algo_cfg.embb_min_sic_snir_db,
+                    )
+                )
+
+            return {
+                "reliability": reliability,
+                "reliability_margin": reliability_margin,
+                "loss": loss,
+                "retention": retention,
+                "urllc_power": float(actual_power),
+                "local_total_power": float(actual_power + local_embb_power_after),
+                "owner_rate_after": owner_rate_after,
+                "owner_minrate_margin": owner_minrate_margin,
+                "owner_minrate_ok": owner_minrate_ok,
+                "owner_service_ok": owner_service_ok,
+                "sic_margin": sic_margin,
+                "base_rate": base_rate,
+            }
+
+    def _compute_current_mode_downstream_snapshot(self) -> Dict[str, float]:
+            embb_rates_eff, embb_power_alloc_eff, _ov_eff, _pu_eff = self._compute_episode_embb_metrics(
+                ignore_intercell=False,
+                apply_local_puncture_deduction=True,
+                apply_embb_source_mask=True,
+            )
+            embb_total_rate_eff = float(np.sum(embb_rates_eff))
+            embb_power_total = float(np.sum(embb_power_alloc_eff))
+            urllc_slot_avg_power = float(np.sum(self.scheduled_power) / max(self.sys_cfg.num_minislots, 1))
+            total_power = float(urllc_slot_avg_power + embb_power_total)
+            embb_min_rate = float(
+                getattr(self.embb_cfg, "min_rate_per_user_bps", getattr(self.embb_cfg, "min_rate", 0.0)) or 0.0
+            )
+            embb_service_ratio_eff = float(np.mean(embb_rates_eff > 0.0)) if embb_rates_eff.size > 0 else 0.0
+            if embb_rates_eff.size > 0 and embb_min_rate > 0.0:
+                embb_minrate_ratio_eff = float(np.mean(embb_rates_eff >= (embb_min_rate - 1.0e-9)))
+            else:
+                embb_minrate_ratio_eff = float(embb_service_ratio_eff)
+            return {
+                "embb_power_total": embb_power_total,
+                "urllc_power_total": urllc_slot_avg_power,
+                "total_power": total_power,
+                "embb_total_rate_eff": embb_total_rate_eff,
+                "embb_service_ratio_eff": float(embb_service_ratio_eff),
+                "embb_minrate_ratio_eff": float(embb_minrate_ratio_eff),
+            }
+
+    def _record_mode_downstream_step(self, selected_mode: int) -> None:
+            if not bool(getattr(self, "enable_mode_downstream_logging", False)):
+                return
+            try:
+                snapshot = self._compute_current_mode_downstream_snapshot()
+            except Exception:
+                return
+            trajectory_index = int(len(self.mode_downstream_trajectory))
+            snapshot["trajectory_index"] = float(trajectory_index)
+            snapshot["selected_mode"] = float(int(selected_mode))
+            self.mode_downstream_trajectory.append(snapshot)
+            if int(selected_mode) in {MODE_OVERLAY, MODE_PUNCTURE}:
+                self.mode_downstream_anchors.append(
+                    {
+                        "mode": int(selected_mode),
+                        "trajectory_index": int(trajectory_index),
+                    }
+                )
+
+    def _summarize_mode_downstream_stats(self) -> Dict[str, float]:
+            summary: Dict[str, float] = {}
+            if not bool(getattr(self, "enable_mode_downstream_logging", False)):
+                return summary
+            trajectory = list(getattr(self, "mode_downstream_trajectory", []) or [])
+            anchors = list(getattr(self, "mode_downstream_anchors", []) or [])
+            if not trajectory or not anchors:
+                return summary
+
+            horizons = []
+            for value in tuple(getattr(self, "mode_downstream_horizons", (5, 10)) or (5, 10)):
+                try:
+                    h = int(value)
+                except Exception:
+                    continue
+                if h > 0:
+                    horizons.append(h)
+            if not horizons:
+                horizons = [5, 10]
+
+            metric_pairs = (
+                ("embb_power_total", "embb_power"),
+                ("total_power", "total_power"),
+                ("embb_total_rate_eff", "embb_rate"),
+                ("embb_minrate_ratio_eff", "embb_minrate"),
+                ("embb_service_ratio_eff", "embb_service"),
+            )
+            mode_specs = (
+                (MODE_OVERLAY, "overlay"),
+                (MODE_PUNCTURE, "puncture"),
+            )
+
+            for horizon in horizons:
+                for mode_value, mode_label in mode_specs:
+                    selected = [item for item in anchors if int(item.get("mode", -1)) == int(mode_value)]
+                    summary[f"mode_downstream_anchor_count_{horizon}_steps_after_{mode_label}"] = float(len(selected))
+                    for metric_key, metric_label in metric_pairs:
+                        future_deltas = []
+                        cumulative_deltas = []
+                        for anchor in selected:
+                            base_idx = int(anchor.get("trajectory_index", -1))
+                            if base_idx < 0 or base_idx >= len(trajectory):
+                                continue
+                            end_idx = base_idx + horizon
+                            if end_idx >= len(trajectory):
+                                continue
+                            base_value = float(trajectory[base_idx].get(metric_key, 0.0) or 0.0)
+                            future_value = float(trajectory[end_idx].get(metric_key, 0.0) or 0.0)
+                            future_deltas.append(float(future_value - base_value))
+                            cumulative = 0.0
+                            for idx in range(base_idx + 1, end_idx + 1):
+                                cumulative += float(trajectory[idx].get(metric_key, 0.0) or 0.0) - base_value
+                            cumulative_deltas.append(float(cumulative))
+                        if future_deltas:
+                            summary[
+                                f"avg_future_{metric_label}_delta_{horizon}_steps_after_{mode_label}"
+                            ] = float(np.mean(np.asarray(future_deltas, dtype=float)))
+                            summary[
+                                f"avg_cumulative_{metric_label}_{horizon}_steps_after_{mode_label}"
+                            ] = float(np.mean(np.asarray(cumulative_deltas, dtype=float)))
+                            summary[
+                                f"mode_downstream_valid_count_{metric_label}_{horizon}_steps_after_{mode_label}"
+                            ] = float(len(future_deltas))
+                        else:
+                            summary[
+                                f"avg_future_{metric_label}_delta_{horizon}_steps_after_{mode_label}"
+                            ] = 0.0
+                            summary[
+                                f"avg_cumulative_{metric_label}_{horizon}_steps_after_{mode_label}"
+                            ] = 0.0
+                            summary[
+                                f"mode_downstream_valid_count_{metric_label}_{horizon}_steps_after_{mode_label}"
+                            ] = 0.0
+            return summary
 
     def _best_local_candidate_throughput_first(
             self,
@@ -12660,6 +13380,8 @@ class SRMAPPOPhaseAEnv:
             owner_rejected_by_snapshot_imitation_ratio = 0.0
             owner_rejected_by_hard_feasibility_ratio = 0.0
             owner_accepted_low_intercell_non_greedy_ratio = 0.0
+            snap_power = float(getattr(self, "phase0_snapshot_embb_total_power", 0.0) or 0.0)
+            exec_power = float(np.sum(np.asarray(getattr(self, "embb_power_grid", np.zeros((0,), dtype=float)), dtype=float)))
             denom_owner_cells = max(int(self.planning_total_decisions), 1)
             snapshot_rb_owner = self.phase0_snapshot_owner_per_uav_rb
             if (
@@ -13365,6 +14087,14 @@ class SRMAPPOPhaseAEnv:
                 ),
                 'embb_user_rates': np.asarray(embb_rates, dtype=float),
                 'embb_user_rates_after_puncture_deduction': np.asarray(embb_rates_eff, dtype=float),
+                'embb_user_rates_before_local_puncture_deduction': np.asarray(
+                    embb_rates_before_local_deduction,
+                    dtype=float,
+                ),
+                'embb_user_rate_loss_due_to_local_puncture': np.maximum(
+                    np.asarray(embb_rates_before_local_deduction, dtype=float) - np.asarray(embb_rates_eff, dtype=float),
+                    0.0,
+                ),
                 'embb_user_rb_count': embb_rb_count_vec,
                 'embb_user_rate_per_assigned_rb_est': embb_rate_per_assigned_rb_est,
                 'embb_user_single_rb_true_rate': embb_single_rb_true_rate,
@@ -13896,6 +14626,11 @@ class SRMAPPOPhaseAEnv:
                 'puncture_count': float(puncture_count),
                 'overlay_candidate_pairs': float(self.overlay_candidate_pairs),
                 'overlay_feasible_pairs': float(self.overlay_feasible_pairs),
+                'puncture_feasible_pairs': float(self.puncture_feasible_pairs),
+                'both_feasible_pairs': float(self.both_feasible_pairs),
+                'overlay_only_feasible_pairs': float(self.overlay_only_feasible_pairs),
+                'puncture_only_feasible_pairs': float(self.puncture_only_feasible_pairs),
+                'neither_feasible_pairs': float(self.neither_feasible_pairs),
                 'overlay_selected_pairs': float(self.overlay_selected_pairs),
                 'overlay_utilization_ratio': float(overlay_utilization),
                 'scheduled_packets': float(scheduled_packets),
@@ -13904,6 +14639,33 @@ class SRMAPPOPhaseAEnv:
                 'avg_overlay_retention': float(np.mean(self.selected_overlay_retentions)) if self.selected_overlay_retentions else 0.0,
                 'avg_puncture_embb_loss': float(np.mean(self.selected_puncture_losses)) if self.selected_puncture_losses else 0.0,
                 'avg_overlay_embb_loss': float(np.mean(self.selected_overlay_losses)) if self.selected_overlay_losses else 0.0,
+                'mappo_overlay_count': float(overlay_count),
+                'mappo_puncture_count': float(puncture_count),
+                'avg_urllc_success_if_overlay': float(np.mean(self.selected_overlay_reliabilities)) if self.selected_overlay_reliabilities else 0.0,
+                'avg_urllc_success_if_puncture': float(np.mean(self.selected_puncture_reliabilities)) if self.selected_puncture_reliabilities else 0.0,
+                'avg_urllc_power_if_overlay': float(np.mean(self.selected_overlay_urllc_powers)) if self.selected_overlay_urllc_powers else 0.0,
+                'avg_urllc_power_if_puncture': float(np.mean(self.selected_puncture_urllc_powers)) if self.selected_puncture_urllc_powers else 0.0,
+                'avg_embb_loss_if_overlay': float(np.mean(self.selected_overlay_losses)) if self.selected_overlay_losses else 0.0,
+                'avg_embb_loss_if_puncture': float(np.mean(self.selected_puncture_losses)) if self.selected_puncture_losses else 0.0,
+                'avg_total_power_if_overlay': float(np.mean(self.selected_overlay_total_powers)) if self.selected_overlay_total_powers else 0.0,
+                'avg_total_power_if_puncture': float(np.mean(self.selected_puncture_total_powers)) if self.selected_puncture_total_powers else 0.0,
+                'avg_embb_retention_if_overlay': float(np.mean(self.selected_overlay_retentions)) if self.selected_overlay_retentions else 0.0,
+                'avg_embb_retention_if_puncture': float(np.mean(self.selected_puncture_retentions)) if self.selected_puncture_retentions else 0.0,
+                'avg_embb_owner_rate_after_if_overlay': float(np.mean(self.selected_overlay_embb_owner_rates_after)) if self.selected_overlay_embb_owner_rates_after else 0.0,
+                'avg_embb_owner_rate_after_if_puncture': float(np.mean(self.selected_puncture_embb_owner_rates_after)) if self.selected_puncture_embb_owner_rates_after else 0.0,
+                'avg_embb_owner_minrate_margin_if_overlay': float(np.mean(self.selected_overlay_embb_owner_minrate_margins)) if self.selected_overlay_embb_owner_minrate_margins else 0.0,
+                'avg_embb_owner_minrate_margin_if_puncture': float(np.mean(self.selected_puncture_embb_owner_minrate_margins)) if self.selected_puncture_embb_owner_minrate_margins else 0.0,
+                'avg_embb_owner_minrate_ok_if_overlay': float(np.mean(self.selected_overlay_embb_owner_minrate_ok)) if self.selected_overlay_embb_owner_minrate_ok else 0.0,
+                'avg_embb_owner_minrate_ok_if_puncture': float(np.mean(self.selected_puncture_embb_owner_minrate_ok)) if self.selected_puncture_embb_owner_minrate_ok else 0.0,
+                'avg_embb_owner_service_ok_if_overlay': float(np.mean(self.selected_overlay_embb_owner_service_ok)) if self.selected_overlay_embb_owner_service_ok else 0.0,
+                'avg_embb_owner_service_ok_if_puncture': float(np.mean(self.selected_puncture_embb_owner_service_ok)) if self.selected_puncture_embb_owner_service_ok else 0.0,
+                'avg_embb_minrate_after_overlay': float(np.mean(self.selected_overlay_embb_owner_minrate_ok)) if self.selected_overlay_embb_owner_minrate_ok else 0.0,
+                'avg_embb_minrate_after_puncture': float(np.mean(self.selected_puncture_embb_owner_minrate_ok)) if self.selected_puncture_embb_owner_minrate_ok else 0.0,
+                'avg_embb_service_ratio_after_overlay': float(np.mean(self.selected_overlay_embb_owner_service_ok)) if self.selected_overlay_embb_owner_service_ok else 0.0,
+                'avg_embb_service_ratio_after_puncture': float(np.mean(self.selected_puncture_embb_owner_service_ok)) if self.selected_puncture_embb_owner_service_ok else 0.0,
+                'avg_reliability_margin_if_overlay': float(np.mean(self.selected_overlay_reliability_margins)) if self.selected_overlay_reliability_margins else 0.0,
+                'avg_reliability_margin_if_puncture': float(np.mean(self.selected_puncture_reliability_margins)) if self.selected_puncture_reliability_margins else 0.0,
+                'avg_sic_margin_if_overlay': float(np.mean(self.selected_overlay_sic_margins)) if self.selected_overlay_sic_margins else 0.0,
                 'admission_via_overlay_ratio': admission_via_overlay_ratio,
                 'admission_via_puncture_ratio': admission_via_puncture_ratio,
                 'low_interference_admission_bonus_mean': float(low_interference_admission_bonus_mean),
@@ -13911,6 +14673,12 @@ class SRMAPPOPhaseAEnv:
                 'overlay_selection_ratio': overlay_selection_ratio,
                 'puncture_selection_ratio': puncture_selection_ratio,
                 'both_modes_feasible_ratio': both_modes_feasible_ratio,
+                'overlay_chosen_when_both_feasible_ratio': float(
+                    self.overlay_chosen_when_both_feasible_count / max(self.both_modes_feasible_count, 1)
+                ),
+                'puncture_chosen_when_both_feasible_ratio': float(
+                    self.puncture_chosen_when_both_feasible_count / max(self.both_modes_feasible_count, 1)
+                ),
                 'safe_puncture_available_ratio': safe_puncture_available_ratio,
                 'feasible_puncture_available_ratio': feasible_puncture_available_ratio,
                 'puncture_chosen_when_feasible_ratio': puncture_chosen_when_feasible_ratio,
@@ -14054,6 +14822,16 @@ class SRMAPPOPhaseAEnv:
                 'planning_projected_embb_rate_ratio_min': planning_projected_embb_rate_ratio_min,
                 'planning_projected_embb_power_ratio_mean': planning_projected_embb_power_ratio_mean,
                 'planning_projected_embb_power_ratio_max': planning_projected_embb_power_ratio_max,
+                'phase0_snapshot_embb_total_power': float(snap_power),
+                'phase0_executed_embb_total_power': float(exec_power),
+                'phase0_executed_vs_snapshot_power_ratio': float(
+                    exec_power / max(snap_power, 1.0e-9)
+                ),
+                'phase0_embb_power_mean': float(exec_power),
+                'phase0_embb_power_delta_mean': float(exec_power - snap_power),
+                'phase0_embb_power_cap_hit_ratio': float(
+                    self.planning_owner_power_ceiling_violation_count / max(self.planning_total_decisions, 1)
+                ),
                 'planning_owner_rate_floor_violation_count': float(self.planning_owner_rate_floor_violation_count),
                 'planning_owner_power_ceiling_violation_count': float(self.planning_owner_power_ceiling_violation_count),
                 'planning_owner_guard_violation_count': float(self.planning_owner_guard_violation_count),
@@ -14062,6 +14840,7 @@ class SRMAPPOPhaseAEnv:
                 'phase_a_embb_power_changed_count': float(self.phase_a_embb_power_changed_count),
                 'phase_a_embb_power_write_ratio': phase_a_embb_power_write_ratio,
                 'phase_a_embb_power_changed_ratio': phase_a_embb_power_changed_ratio,
+                'phase_a_embb_power_write_ratio_alias': phase_a_embb_power_write_ratio,
                 'phase_a_power_zeroed_non_admission_count': float(self.phase_a_power_zeroed_non_admission_count),
                 'phase_a_power_zeroed_non_admission_ratio': float(phase_a_power_zeroed_non_admission_ratio),
                 'phase_a_power_write_on_admission_ratio': float(phase_a_power_write_on_admission_ratio),
@@ -14138,6 +14917,7 @@ class SRMAPPOPhaseAEnv:
                 'phase_a_embb_power_final_minus_proj_delta': phase_a_embb_power_final_minus_proj_delta,
                 'phase_a_embb_power_mean_abs_raw_delta': phase_a_embb_power_mean_abs_raw_delta,
                 'phase_a_embb_power_mean_abs_executed_delta': phase_a_embb_power_mean_abs_executed_delta,
+                'phase_a_embb_power_mean_abs_executed_delta_alias': phase_a_embb_power_mean_abs_executed_delta,
                 'phase_a_embb_power_mean_raw_delta_l2': phase_a_embb_power_mean_raw_delta_l2,
                 'phase_a_embb_power_invalid_or_masked_ratio': phase_a_embb_power_invalid_or_masked_ratio,
                 'phase_a_embb_power_zeroed_inactive_head_count': float(self.phase_a_embb_power_zeroed_inactive_head_count),
@@ -14199,6 +14979,7 @@ class SRMAPPOPhaseAEnv:
                 'step_calls': float(self.step_calls),
                 'step_total_sec': float(self.step_total_sec),
             }
+            summary.update(self._summarize_mode_downstream_stats())
             reward_term_keys = [
                 'safe_admission_bonus',
                 'unsafe_admission_penalty',
@@ -14248,8 +15029,11 @@ class SRMAPPOPhaseAEnv:
                 'terminal_embb_served_user_count_bonus',
                 'terminal_embb_served_user_deficit_penalty',
                 'terminal_intercell_power_penalty',
+                'terminal_total_power_budget_penalty',
                 'terminal_total_power_over_greedy_penalty',
                 'terminal_embb_power_over_greedy_penalty',
+                'terminal_urllc_power_over_greedy_penalty',
+                'terminal_urllc_power_share_penalty',
                 'terminal_unscheduled_packets',
                 'terminal_zero_admission_active_penalty',
                 'terminal_frontier_mode_bonus',
