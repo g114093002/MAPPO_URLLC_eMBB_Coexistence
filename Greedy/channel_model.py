@@ -34,18 +34,50 @@ class ChannelModel:
         self._nested_anchor_topology = None
         self._nested_anchor_shape = None
 
+    def _resolve_uav_positions(self, num_uavs: int) -> np.ndarray:
+        """Resolve one UAV layout, enforcing a minimum pairwise separation when possible."""
+        cfg_positions = getattr(self.config, 'uav_positions', None)
+        min_sep = float(getattr(self.config, 'uav_min_separation', 0.0) or 0.0)
+        margin = float(getattr(self.config, 'user_min_boundary_margin', 20.0) or 20.0)
+        if cfg_positions is not None and len(cfg_positions) >= num_uavs:
+            uav_positions = np.asarray(cfg_positions[:num_uavs], dtype=float).copy()
+            if min_sep <= 0.0 or num_uavs <= 1:
+                return uav_positions
+            ok = True
+            for i in range(num_uavs):
+                for j in range(i + 1, num_uavs):
+                    if float(np.linalg.norm(uav_positions[i] - uav_positions[j])) + 1.0e-9 < min_sep:
+                        ok = False
+                        break
+                if not ok:
+                    break
+            if ok:
+                return uav_positions
+
+        # Fallback: greedily sample UAV positions with the configured separation.
+        positions = []
+        max_tries = 2000
+        for _ in range(max_tries):
+            cand = np.array([
+                self.rng.uniform(margin, max(self.config.area_width - margin, margin + 1.0)),
+                self.rng.uniform(margin, max(self.config.area_height - margin, margin + 1.0)),
+            ], dtype=float)
+            if min_sep > 0.0 and positions:
+                dmin = min(float(np.linalg.norm(cand - prev)) for prev in positions)
+                if dmin + 1.0e-9 < min_sep:
+                    continue
+            positions.append(cand)
+            if len(positions) >= num_uavs:
+                return np.asarray(positions, dtype=float)
+
+        # Last resort: deterministic spread if the area is too tight for the requested separation.
+        x_coords = np.linspace(margin, self.config.area_width - margin, num_uavs)
+        y_coords = np.linspace(margin, self.config.area_height - margin, num_uavs)
+        return np.column_stack((x_coords, y_coords[::-1]))
+
     def _build_topology(self, num_users: int, num_uavs: int):
         """Build one full topology sample for a specific user/UAV shape."""
-        if (
-            hasattr(self.config, 'uav_positions') and
-            self.config.uav_positions is not None and
-            len(self.config.uav_positions) >= num_uavs
-        ):
-            uav_positions = np.asarray(self.config.uav_positions[:num_uavs], dtype=float)
-        else:
-            x_coords = np.linspace(80.0, self.config.area_width - 80.0, num_uavs)
-            y_coords = np.linspace(80.0, self.config.area_height - 80.0, num_uavs)
-            uav_positions = np.column_stack((x_coords, y_coords[::-1]))
+        uav_positions = self._resolve_uav_positions(num_uavs)
 
         user_positions = np.zeros((num_users, 2), dtype=float)
         serving_hints = np.zeros(num_users, dtype=int)
@@ -58,9 +90,11 @@ class ChannelModel:
         min_user_spacing = max(min_user_spacing, 0.0)
         spacing_max_tries = int(os.getenv("SR_MAPPO_USER_MIN_SPACING_MAX_TRIES", "40") or "40")
         spacing_max_tries = max(spacing_max_tries, 1)
-        intra_cluster_max_dist = float(os.getenv("SR_MAPPO_USER_INTRA_CLUSTER_MAX_DIST", "0.0") or "0.0")
+        intra_cluster_max_dist_default = str(getattr(self.config, 'user_intra_cluster_max_dist', 0.0) or 0.0)
+        intra_cluster_max_dist = float(os.getenv("SR_MAPPO_USER_INTRA_CLUSTER_MAX_DIST", intra_cluster_max_dist_default) or intra_cluster_max_dist_default)
         intra_cluster_max_dist = max(intra_cluster_max_dist, 0.0)
-        inter_cluster_min_dist = float(os.getenv("SR_MAPPO_USER_INTER_CLUSTER_MIN_DIST", "0.0") or "0.0")
+        inter_cluster_min_dist_default = str(getattr(self.config, 'user_inter_cluster_min_dist', 0.0) or 0.0)
+        inter_cluster_min_dist = float(os.getenv("SR_MAPPO_USER_INTER_CLUSTER_MIN_DIST", inter_cluster_min_dist_default) or inter_cluster_min_dist_default)
         inter_cluster_min_dist = max(inter_cluster_min_dist, 0.0)
         highload_threshold = float(os.getenv("SR_MAPPO_USER_CLUSTER_SPREAD_HIGHLOAD_THRESHOLD", "0.75") or "0.75")
         highload_scale = float(os.getenv("SR_MAPPO_USER_CLUSTER_SPREAD_HIGHLOAD_SCALE", "1.0") or "1.0")

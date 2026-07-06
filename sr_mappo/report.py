@@ -33,7 +33,7 @@ from sr_mappo.baseline_catalog import (
     normalize_baseline_mode as _shared_normalize_baseline_mode,
 )
 from sr_mappo.compare import _build_main_like_configs, _configure_density_scenario
-from sr_mappo.config import SRMAPPOConfig, cfg_from_dict
+from sr_mappo.config import SRMAPPOConfig, cfg_from_dict, torch_load_checkpoint
 from sr_mappo.env import SRMAPPOPhaseAEnv
 from sr_mappo.experiments import EXPERIMENT_CHOICES, apply_experiment_preset, experiment_label
 from sr_mappo.load_aware import load_aware_score_mix, load_aware_selection_score, selection_floor_for_load
@@ -139,6 +139,7 @@ CURRENT_TOP_LEVEL_REPORT_FILES = {
     '19_mode_anchor_debug.png',
     'custom_min_rate_satisfied_count_compare.png',
     'custom_admitted_urllc_packets_compare.png',
+    'power_split_compare.png',
     'mode_action_share_compare.png',
     'mode_raw_vs_executed_compare.png',
     'sr_mappo_report_metrics.json',
@@ -269,6 +270,7 @@ def _build_episode_scene_audit(episodes: List[Dict]) -> Dict[str, object]:
             "active_packets": float(episode.get("active_packets", 0.0) or 0.0),
             "scheduled_packets": float(episode.get("scheduled_packets", 0.0) or 0.0),
             "urllc_admission": float(episode.get("urllc_admission", 0.0) or 0.0),
+            "episode_reward_mean": float(episode.get("episode_reward_mean", 0.0) or 0.0),
         })
 
     def _unique_count(key: str) -> int:
@@ -886,6 +888,14 @@ def _greedy_baseline_mode(cfg: SRMAPPOConfig) -> str:
         return "rate_loss_min_greedy"
     if override in {"force_admit_minloss", "rate_loss_force_admit", "sumrate_force_admit"}:
         return "force_admit_minloss_greedy"
+    if override in {
+        "pure_force_admit_globaltp",
+        "force_admit_globaltp",
+        "force_admit_max_global_tp",
+        "pure_globaltp_force_admit",
+        "pure_global_tp_force_admit",
+    }:
+        return "pure_force_admit_globaltp_greedy"
     if override in {"channel_only"}:
         return "channel_only_greedy"
     if override in {"myopic", "myopic_throughput"}:
@@ -930,8 +940,55 @@ def _normalize_frozen_representative(payload: Dict) -> Dict[float, Dict]:
 
 
 def _load_checkpoint_cfg(checkpoint_path: Path) -> SRMAPPOConfig:
-    payload = torch.load(checkpoint_path, map_location='cpu')
+    payload = torch_load_checkpoint(checkpoint_path, map_location='cpu')
     return cfg_from_dict(payload.get('cfg'))
+
+
+def _checkpoint_local_obs_input_dim(checkpoint_path: Path) -> Optional[int]:
+    payload = torch_load_checkpoint(checkpoint_path, map_location='cpu')
+    state_dict = payload.get('model_state_dict', {}) if isinstance(payload, dict) else {}
+    weight = state_dict.get('actor_encoder.mlp.0.weight')
+    if weight is None or getattr(weight, "ndim", 0) != 2:
+        return None
+    try:
+        return int(weight.shape[1])
+    except Exception:
+        return None
+
+
+def _resolve_torch_device(device_like: object) -> torch.device:
+    device_str = str(device_like or "auto").strip().lower()
+    if device_str in {"", "auto"}:
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    return torch.device(device_str)
+
+
+def _align_report_obs_to_checkpoint(
+    report_cfg: SRMAPPOConfig,
+    checkpoint_cfg: SRMAPPOConfig,
+    checkpoint_path: Path,
+    *,
+    num_subcarriers: int,
+) -> None:
+    report_cfg.action.max_candidate_packets = int(getattr(checkpoint_cfg.action, "max_candidate_packets", report_cfg.action.max_candidate_packets))
+    report_cfg.env.include_frontier_progress_obs = bool(getattr(checkpoint_cfg.env, "include_frontier_progress_obs", False))
+    report_cfg.env.include_quota_progress_obs = bool(getattr(checkpoint_cfg.env, "include_quota_progress_obs", False))
+    report_cfg.env.include_greedy_reference_in_obs = bool(getattr(checkpoint_cfg.env, "include_greedy_reference_in_obs", False))
+
+    progress_dim = 0
+    if bool(getattr(report_cfg.env, "include_frontier_progress_obs", False)):
+        progress_dim += 3
+    if bool(getattr(report_cfg.env, "include_quota_progress_obs", False)):
+        progress_dim += 7
+    checkpoint_local_dim = _checkpoint_local_obs_input_dim(checkpoint_path)
+    if checkpoint_local_dim is None:
+        return
+    base_without_rb_summary = 19 + progress_dim + 16 * int(report_cfg.action.max_candidate_packets)
+    with_rb_summary = base_without_rb_summary + 9 * int(num_subcarriers)
+    if checkpoint_local_dim == base_without_rb_summary:
+        report_cfg.env.include_rb_summary_observation = False
+    elif checkpoint_local_dim == with_rb_summary:
+        report_cfg.env.include_rb_summary_observation = True
 
 
 def _report_seed_base(load_idx: int, cfg: Optional[SRMAPPOConfig] = None) -> int:
@@ -1426,7 +1483,7 @@ def _checkpoint_metadata(path: Path) -> Dict:
         'iteration': None,
     }
     try:
-        payload = torch.load(path, map_location='cpu')
+        payload = torch_load_checkpoint(path, map_location='cpu')
         extra = payload.get('extra', {}) if isinstance(payload, dict) else {}
         meta['iteration'] = extra.get('iteration')
         meta['phase_a_embb_power_runtime_enabled'] = bool(
@@ -1496,7 +1553,7 @@ def _load_history_from_final(cfg: Optional[SRMAPPOConfig] = None, checkpoint_pat
             continue
         seen.add(path)
         try:
-            payload = torch.load(path, map_location='cpu')
+            payload = torch_load_checkpoint(path, map_location='cpu')
             extra = payload.get('extra', {}) or {}
             history = extra.get('history', []) or []
             if history:
@@ -1517,7 +1574,7 @@ def _load_history_for_report(cfg: Optional[SRMAPPOConfig] = None, checkpoint_pat
         path = Path(checkpoint_path)
         if path.exists():
             try:
-                payload = torch.load(path, map_location='cpu')
+                payload = torch_load_checkpoint(path, map_location='cpu')
                 extra = payload.get('extra', {}) if isinstance(payload, dict) else {}
                 history = extra.get('history', []) or []
                 if history:
@@ -1990,6 +2047,18 @@ def _force_admit_minloss_actions(env, observations):
     return actions, diagnostics
 
 
+def _pure_force_admit_globaltp_actions(env, observations):
+    """Pure-sumrate owner baseline + no-KEEP hard-feasible max-global-throughput admit baseline."""
+
+    actions = {}
+    diagnostics = {}
+    for agent_id, obs in observations.items():
+        action, debug = env.pure_force_admit_globaltp_greedy_action(obs)
+        actions[agent_id] = action
+        diagnostics[agent_id] = debug
+    return actions, diagnostics
+
+
 def _hard_feasible_throughput_actions(env, observations):
     actions = {}
     diagnostics = {}
@@ -2286,7 +2355,7 @@ def run_greedy_sweep(loads: List[float], episodes_per_load: int) -> Tuple[Dict, 
 def _build_model_for_env(env: SRMAPPOPhaseAEnv, checkpoint_path: Path) -> Tuple[SRMAPPOConfig, SRMAPPOActorCritic]:
     from .trainer import set_phase_a_embb_power_runtime
 
-    payload = torch.load(checkpoint_path, map_location='cpu')
+    payload = torch_load_checkpoint(checkpoint_path, map_location='cpu')
     cfg = cfg_from_dict(payload.get('cfg'))
     model = SRMAPPOActorCritic(env.local_obs_dim, env.global_obs_dim, cfg)
     missing, unexpected = model.load_state_dict(payload['model_state_dict'], strict=False)
@@ -2294,7 +2363,6 @@ def _build_model_for_env(env: SRMAPPOPhaseAEnv, checkpoint_path: Path) -> Tuple[
         _report_log(f"Checkpoint missing keys (initialized to default): {missing}")
     if unexpected:
         _report_log(f"Checkpoint has unexpected keys (ignored): {unexpected}")
-    model.to(torch.device(cfg.training.device))
     model.eval()
     extra = payload.get('extra', {}) if isinstance(payload, dict) else {}
     runtime_enabled = bool(
@@ -2303,6 +2371,7 @@ def _build_model_for_env(env: SRMAPPOPhaseAEnv, checkpoint_path: Path) -> Tuple[
             getattr(cfg.env, 'allow_phase_a_embb_power_adjustment', False),
         )
     )
+    model.to(_resolve_torch_device(getattr(cfg.training, "device", "auto")))
     set_phase_a_embb_power_runtime(env, model, runtime_enabled)
     return cfg, model
 
@@ -2435,6 +2504,7 @@ def run_env_episode(
     greedy_noop_better_sum = 0.0
     greedy_requires_feasible_only = 0.0
     greedy_hf_raw_count_sum = 0.0
+    greedy_hf_pure_global_tp_sort_sum = 0.0
     greedy_hf_admissible_count_sum = 0.0
     greedy_hf_evaluated_count_sum = 0.0
     greedy_hf_feasible_count_sum = 0.0
@@ -2503,6 +2573,8 @@ def run_env_episode(
     action_select_sec_total = 0.0
     action_resolve_sec_total = 0.0
     env_step_sec_total = 0.0
+    episode_reward_sum = 0.0
+    episode_step_count = 0
 
     while not done:
         current_obs = observations
@@ -2547,6 +2619,14 @@ def run_env_episode(
                 joint_actions, greedy_debug = _rate_loss_min_actions(env, current_obs)
             elif normalized_greedy_policy in {"force_admit_minloss", "rate_loss_force_admit", "sumrate_force_admit"}:
                 joint_actions, greedy_debug = _force_admit_minloss_actions(env, current_obs)
+            elif normalized_greedy_policy in {
+                "pure_force_admit_globaltp",
+                "force_admit_globaltp",
+                "force_admit_max_global_tp",
+                "pure_globaltp_force_admit",
+                "pure_global_tp_force_admit",
+            }:
+                joint_actions, greedy_debug = _pure_force_admit_globaltp_actions(env, current_obs)
             else:
                 joint_actions = _greedy_actions(env, current_obs)
         else:
@@ -2583,6 +2663,7 @@ def run_env_episode(
                     float(debug.get("current_env_requires_feasible_admission_only", 0.0)),
                 )
                 greedy_hf_raw_count_sum += float(debug.get("greedy_hf_raw_count", 0.0))
+                greedy_hf_pure_global_tp_sort_sum += float(debug.get("greedy_hf_pure_global_tp_sort", 0.0))
                 greedy_hf_admissible_count_sum += float(debug.get("greedy_hf_admissible_count", 0.0))
                 greedy_hf_evaluated_count_sum += float(debug.get("greedy_hf_evaluated_count", 0.0))
                 greedy_hf_feasible_count_sum += float(debug.get("greedy_hf_feasible_count", 0.0))
@@ -2742,6 +2823,8 @@ def run_env_episode(
             pre_resolved_actions=resolved,
         )
         env_step_sec_total += float(perf_counter() - _env_step_t0)
+        episode_reward_sum += float(np.mean([float(rewards[aid]) for aid in env.agent_ids]))
+        episode_step_count += 1
         done = all(dones.values())
         if collect_trace and not planning_phase:
             summary = env.summarize_episode()
@@ -2825,6 +2908,7 @@ def run_env_episode(
     # plotted reliably (Phase-A suppress reasons, intercell step penalty components, load=10 diagnostics, etc.).
     result = {
         **dict(summary),
+        'episode_reward_mean': float(episode_reward_sum / max(episode_step_count, 1)),
         'phase': str(summary.get('phase', env.rl_cfg.env.phase)),
         'learn_embb_baseline': float(summary.get('learn_embb_baseline', float(bool(env.rl_cfg.env.learn_embb_baseline)))),
         'learn_phase0_embb_power': float(summary.get('learn_phase0_embb_power', float(bool(getattr(env.rl_cfg.env, 'learn_phase0_embb_power', True))))),
@@ -3080,9 +3164,11 @@ def run_env_episode(
         'phase_a_rejected_other_per_decision': float(summary.get('phase_a_rejected_other_per_decision', 0.0)),
         'phase_a_rejected_other_gain_ratio_per_decision': float(summary.get('phase_a_rejected_other_gain_ratio_per_decision', 0.0)),
         'phase_a_rejected_other_overlay_margin_per_decision': float(summary.get('phase_a_rejected_other_overlay_margin_per_decision', 0.0)),
+        'phase_a_rejected_other_overlay_retention_gate_per_decision': float(summary.get('phase_a_rejected_other_overlay_retention_gate_per_decision', 0.0)),
         'phase_a_rejected_other_overlay_positive_gate_per_decision': float(summary.get('phase_a_rejected_other_overlay_positive_gate_per_decision', 0.0)),
         'phase_a_rejected_other_gain_ratio_given_other_ratio': float(summary.get('phase_a_rejected_other_gain_ratio_given_other_ratio', 0.0)),
         'phase_a_rejected_other_overlay_margin_given_other_ratio': float(summary.get('phase_a_rejected_other_overlay_margin_given_other_ratio', 0.0)),
+        'phase_a_rejected_other_overlay_retention_gate_given_other_ratio': float(summary.get('phase_a_rejected_other_overlay_retention_gate_given_other_ratio', 0.0)),
         'phase_a_rejected_other_overlay_positive_gate_given_other_ratio': float(summary.get('phase_a_rejected_other_overlay_positive_gate_given_other_ratio', 0.0)),
         'phase_a_embb_power_write_count': float(summary.get('phase_a_embb_power_write_count', 0.0)),
         'phase_a_embb_power_changed_count': float(summary.get('phase_a_embb_power_changed_count', 0.0)),
@@ -3215,6 +3301,7 @@ def run_env_episode(
             'greedy_noop_available_ratio': float(greedy_noop_available_sum / decision_denom),
             'greedy_noop_better_ratio': float(greedy_noop_better_sum / decision_denom),
             'greedy_requires_feasible_admission_only': float(greedy_requires_feasible_only),
+            'greedy_hf_pure_global_tp_sort': float(greedy_hf_pure_global_tp_sort_sum / decision_denom),
             'greedy_hf_raw_count': float(greedy_hf_raw_count_sum / decision_denom),
             'greedy_hf_admissible_count': float(greedy_hf_admissible_count_sum / decision_denom),
             'greedy_hf_evaluated_count': float(greedy_hf_evaluated_count_sum / decision_denom),
@@ -3351,6 +3438,12 @@ def run_mappo_sweep(
         report_cfg.training.report_fast_debug = bool(getattr(base_cfg.training, "report_fast_debug", getattr(report_cfg.training, "report_fast_debug", False)))
         report_cfg.training.report_baseline_mode = getattr(base_cfg.training, "report_baseline_mode", getattr(report_cfg.training, "report_baseline_mode", ""))
         report_cfg.training.primary_checkpoint_preference = getattr(base_cfg.training, "primary_checkpoint_preference", report_cfg.training.primary_checkpoint_preference)
+    _align_report_obs_to_checkpoint(
+        report_cfg,
+        checkpoint_cfg,
+        checkpoint_path,
+        num_subcarriers=int(base_sys.num_subcarriers),
+    )
     report_cfg.env.include_greedy_reference_in_obs = False
     _apply_forced_urllc_ratio_to_sim(base_sim, report_cfg, log_prefix="MAPPO")
     checkpoint_cache_tag = str(Path(checkpoint_path).resolve())
@@ -4419,10 +4512,21 @@ def run_force_admit_minloss_greedy_sweep(
     report_cfg.env.include_greedy_reference_in_obs = False
     report_cfg.training.greedy_baseline_mode = "force_admit_minloss_greedy"
     report_cfg.training.selection_baseline_mode = "force_admit_minloss_greedy"
+    _apply_forced_urllc_ratio_to_sim(base_sim, report_cfg, log_prefix="FORCE-ADMIT-MINLOSS")
     checkpoint_cache_tag = str(Path(checkpoint_path).resolve())
+    virtual_slots_per_episode = max(
+        1,
+        int(os.environ.get("SR_MAPPO_REPORT_VIRTUAL_SLOTS_PER_EPISODE", "1") or "1"),
+    )
+    if virtual_slots_per_episode > 1:
+        _report_log(
+            f"[FORCE-ADMIT-MINLOSS] virtual multi-slot enabled: slots_per_episode={virtual_slots_per_episode}"
+        )
     scalar_keys = [
         'embb_rate', 'embb_user_rate', 'embb_service_ratio', 'embb_positive_rate_ratio', 'embb_min_rate_satisfaction_ratio', 'embb_min_rate_satisfied_user_count', 'urllc_admission',
         'admitted_urllc_reliability', 'urllc_reliability', 'effective_urllc_success_over_arrivals', 'empty_admission_case',
+        'effective_lambda_per_user', 'effective_lambda_per_user_per_minislot',
+        'expected_total_arrivals_per_minislot', 'expected_total_arrivals_per_episode',
         'active_packets', 'scheduled_packets', 'total_power', 'embb_power', 'urllc_power',
         'overlay_ratio', 'puncture_ratio', 'overlay_selection_ratio', 'puncture_selection_ratio', 'embb_only_fraction', 'avg_puncture_loss',
         'avg_overlay_retention', 'overlay_candidate_pairs', 'overlay_feasible_pairs',
@@ -4459,7 +4563,7 @@ def run_force_admit_minloss_greedy_sweep(
         seed_base = _report_seed_base(load_idx, report_cfg)
         episodes, representative[load] = _run_episode_batch_with_representative(
             episodes_per_load,
-            lambda ep, collect_trace: run_env_episode(
+            lambda ep, collect_trace: _run_env_episode_virtual_slots(
                 env,
                 model=None,
                 cfg=report_cfg,
@@ -4468,6 +4572,7 @@ def run_force_admit_minloss_greedy_sweep(
                 use_greedy=True,
                 greedy_policy="force_admit_minloss",
                 cache_tag=checkpoint_cache_tag,
+                virtual_slots=virtual_slots_per_episode,
             ),
         )
         metrics['loads'].append(float(load))
@@ -4584,6 +4689,8 @@ def run_hard_feasible_throughput_greedy_sweep(
         greedy_policy_override = greedy_policy_override_raw
     elif cfg_mode_normalized == "global_frontier_greedy":
         greedy_policy_override = "global_frontier"
+    elif cfg_mode_normalized == "pure_force_admit_globaltp_greedy":
+        greedy_policy_override = "pure_force_admit_globaltp"
     elif cfg_mode_normalized == "throughput_only_greedy":
         greedy_policy_override = "throughput_only"
     elif cfg_mode_normalized == "channel_only_greedy":
@@ -4716,6 +4823,14 @@ def run_hard_feasible_throughput_greedy_sweep(
     baseline_mode_name = (
         "global_frontier_greedy"
         if greedy_policy_override in {"global_frontier", "global_greedy"}
+        else "pure_force_admit_globaltp_greedy"
+        if greedy_policy_override in {
+            "pure_force_admit_globaltp",
+            "force_admit_globaltp",
+            "force_admit_max_global_tp",
+            "pure_globaltp_force_admit",
+            "pure_global_tp_force_admit",
+        }
         else "hard_feasible_throughput_greedy"
     )
     report_cfg.training.greedy_baseline_mode = baseline_mode_name
@@ -4773,6 +4888,7 @@ def run_hard_feasible_throughput_greedy_sweep(
         'greedy_keep_only_when_no_feasible_admit_ratio', 'greedy_selected_urllc_reliability', 'greedy_selected_embb_min_rate_ok',
         'greedy_avg_rejected_urllc_when_noop_better', 'greedy_noop_available_ratio',
         'greedy_noop_better_ratio', 'greedy_requires_feasible_admission_only',
+        'greedy_hf_pure_global_tp_sort',
         'greedy_urllc_budget_used_ratio', 'greedy_urllc_budget_utilization_ratio',
         'greedy_embb_loss_share_cap_ratio',
         'greedy_hf_reject_reliability_ratio', 'greedy_hf_reject_power_ratio',
@@ -6449,6 +6565,14 @@ def run_selected_greedy_sweep(
     if mode == "channel_only_greedy":
         metrics, representative = run_channel_only_greedy_sweep(loads, episodes_per_load, checkpoint_path, cfg)
         return metrics, representative, None
+    if mode == "force_admit_minloss_greedy":
+        metrics, representative = run_force_admit_minloss_greedy_sweep(loads, episodes_per_load, checkpoint_path, cfg)
+        return metrics, representative, None
+    if mode == "pure_force_admit_globaltp_greedy":
+        metrics, representative = run_hard_feasible_throughput_greedy_sweep(
+            loads, episodes_per_load, checkpoint_path, cfg
+        )
+        return metrics, representative, None
     if mode == "frozen_json":
         metrics, representative, payload = _load_frozen_greedy_for_report(cfg, loads, episodes_per_load)
         return metrics, representative, payload
@@ -6577,6 +6701,19 @@ def run_report_greedy_bundle(
         metrics_bundle['force_admit_minloss_greedy'] = force_admit_metrics
         representative_bundle['force_admit_minloss_greedy'] = force_admit_rep
 
+    if selected_mode == "pure_force_admit_globaltp_greedy" or frozen_mode == "pure_force_admit_globaltp_greedy":
+        metrics_bundle['pure_force_admit_globaltp_greedy'] = selected_metrics
+        representative_bundle['pure_force_admit_globaltp_greedy'] = selected_rep
+    else:
+        pure_globaltp_cfg = deepcopy(cfg)
+        pure_globaltp_cfg.training.greedy_baseline_mode = "pure_force_admit_globaltp_greedy"
+        pure_globaltp_cfg.training.selection_baseline_mode = "pure_force_admit_globaltp_greedy"
+        pure_globaltp_metrics, pure_globaltp_rep = run_hard_feasible_throughput_greedy_sweep(
+            loads, episodes_per_load, checkpoint_path, pure_globaltp_cfg
+        )
+        metrics_bundle['pure_force_admit_globaltp_greedy'] = pure_globaltp_metrics
+        representative_bundle['pure_force_admit_globaltp_greedy'] = pure_globaltp_rep
+
     if selected_mode == "channel_only_greedy" or frozen_mode == "channel_only_greedy":
         metrics_bundle['channel_only_greedy'] = selected_metrics
         representative_bundle['channel_only_greedy'] = selected_rep
@@ -6628,6 +6765,7 @@ def _baseline_style(mode: str | None) -> tuple[str, str]:
         'throughput_only_greedy': ('tab:purple', 'D'),
         'rate_loss_min_greedy': ('tab:olive', '>'),
         'force_admit_minloss_greedy': ('tab:red', 'P'),
+        'pure_force_admit_globaltp_greedy': ('black', '*'),
         'channel_only_greedy': ('tab:gray', 'v'),
     }
     return style_map.get(_normalize_baseline_mode(mode), ('tab:purple', 'D'))
@@ -6955,6 +7093,10 @@ def run_greedy_timeslot_series(
         greedy_cfg = deepcopy(report_cfg)
         greedy_cfg.env.include_greedy_reference_in_obs = False
         greedy_env = SRMAPPOPhaseAEnv(sys_cfg, urllc_cfg, embb_cfg, algo_cfg, sim_cfg, greedy_cfg)
+    elif greedy_mode == "pure_force_admit_globaltp_greedy":
+        greedy_cfg = deepcopy(report_cfg)
+        greedy_cfg.env.include_greedy_reference_in_obs = False
+        greedy_env = SRMAPPOPhaseAEnv(sys_cfg, urllc_cfg, embb_cfg, algo_cfg, sim_cfg, greedy_cfg)
     elif greedy_mode == "myopic_throughput_greedy":
         greedy_cfg = deepcopy(report_cfg)
         greedy_cfg.env.include_greedy_reference_in_obs = False
@@ -7081,6 +7223,17 @@ def run_greedy_timeslot_series(
                 collect_trace=False,
                 use_greedy=True,
                 greedy_policy="force_admit_minloss",
+                cache_tag=str(Path(checkpoint_path).resolve()),
+            )
+        elif greedy_mode == "pure_force_admit_globaltp_greedy":
+            greedy_summary = run_env_episode(
+                greedy_env,
+                model=None,
+                cfg=report_cfg,
+                seed=seed,
+                collect_trace=False,
+                use_greedy=True,
+                greedy_policy="pure_force_admit_globaltp",
                 cache_tag=str(Path(checkpoint_path).resolve()),
             )
         elif greedy_mode == "channel_only_greedy":
@@ -7452,16 +7605,24 @@ def plot_min_rate_satisfied_count_compare(
     *,
     baseline_label: str = "Greedy",
 ) -> Path:
+    def _aligned_series(data: Dict, key: str, x_size: int) -> np.ndarray:
+        arr = np.asarray(data.get(key, []), dtype=float)
+        if arr.size == x_size:
+            return arr
+        if x_size > 0 and arr.size == 2 * x_size:
+            return arr.reshape(int(x_size), 2).mean(axis=1)
+        return np.asarray([], dtype=float)
+
     x, xlabel = _report_compare_total_user_axis(rl, baseline)
-    rl_count = np.asarray(rl.get('embb_min_rate_satisfied_user_count', []), dtype=float)
-    baseline_count = np.asarray(baseline.get('embb_min_rate_satisfied_user_count', []), dtype=float)
+    rl_count = _aligned_series(rl, 'embb_min_rate_satisfied_user_count', x.size)
+    baseline_count = _aligned_series(baseline, 'embb_min_rate_satisfied_user_count', x.size)
     if rl_count.size != x.size:
-        rl_ratio = np.asarray(rl.get('embb_min_rate_satisfaction_ratio', []), dtype=float)
-        rl_users = np.asarray(rl.get('embb_user_count', []), dtype=float)
+        rl_ratio = _aligned_series(rl, 'embb_min_rate_satisfaction_ratio', x.size)
+        rl_users = _aligned_series(rl, 'embb_user_count', x.size)
         rl_count = rl_ratio * rl_users if rl_ratio.size == x.size and rl_users.size == x.size else np.zeros_like(x)
     if baseline_count.size != x.size:
-        baseline_ratio = np.asarray(baseline.get('embb_min_rate_satisfaction_ratio', []), dtype=float)
-        baseline_users = np.asarray(baseline.get('embb_user_count', []), dtype=float)
+        baseline_ratio = _aligned_series(baseline, 'embb_min_rate_satisfaction_ratio', x.size)
+        baseline_users = _aligned_series(baseline, 'embb_user_count', x.size)
         baseline_count = baseline_ratio * baseline_users if baseline_ratio.size == x.size and baseline_users.size == x.size else np.zeros_like(x)
 
     fig, ax = plt.subplots(figsize=(9.2, 5.4), constrained_layout=True)
@@ -7473,6 +7634,46 @@ def plot_min_rate_satisfied_count_compare(
     ax.grid(True, alpha=0.25)
     ax.legend(loc='best', fontsize=9, frameon=False)
     path = RESULTS_DIR / 'custom_min_rate_satisfied_count_compare.png'
+    fig.savefig(path, dpi=220)
+    plt.close(fig)
+    return path
+
+
+def plot_power_split_compare(
+    rl: Dict,
+    baseline: Dict,
+    *,
+    baseline_label: str = "Greedy",
+) -> Path:
+    def _aligned_series(data: Dict, key: str, x_size: int) -> np.ndarray:
+        arr = np.asarray(data.get(key, []), dtype=float)
+        if arr.size == x_size:
+            return arr
+        if x_size > 0 and arr.size == 2 * x_size:
+            return arr.reshape(int(x_size), 2).mean(axis=1)
+        return np.zeros(x_size, dtype=float)
+
+    x, xlabel = _report_compare_total_user_axis(rl, baseline)
+    m_embb = _aligned_series(rl, 'embb_power', x.size) * 1e3
+    m_urllc = _aligned_series(rl, 'urllc_power', x.size) * 1e3
+    m_total = _aligned_series(rl, 'total_power', x.size) * 1e3
+    g_embb = _aligned_series(baseline, 'embb_power', x.size) * 1e3
+    g_urllc = _aligned_series(baseline, 'urllc_power', x.size) * 1e3
+    g_total = _aligned_series(baseline, 'total_power', x.size) * 1e3
+
+    fig, ax = plt.subplots(figsize=(9.8, 5.6), constrained_layout=True)
+    ax.plot(x, m_embb, color='tab:orange', marker='s', markersize=6, linewidth=2.0, label='MAPPO eMBB power')
+    ax.plot(x, m_urllc, color='tab:green', marker='^', markersize=6, linewidth=2.0, label='MAPPO URLLC power')
+    ax.plot(x, m_total, color='tab:blue', marker='P', markersize=6, linewidth=2.0, label='MAPPO total power')
+    ax.plot(x, g_embb, color='tab:brown', marker='o', markersize=6, linewidth=2.0, linestyle='--', label=f'{baseline_label} eMBB power')
+    ax.plot(x, g_urllc, color='tab:olive', marker='d', markersize=6, linewidth=2.0, linestyle='--', label=f'{baseline_label} URLLC power')
+    ax.plot(x, g_total, color='tab:gray', marker='x', markersize=6, linewidth=2.0, linestyle='--', label=f'{baseline_label} total power')
+    ax.set_title('Power split')
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel('mW')
+    ax.grid(True, alpha=0.25)
+    ax.legend(loc='best', fontsize=9, frameon=False, ncol=2)
+    path = RESULTS_DIR / 'power_split_compare.png'
     fig.savefig(path, dpi=220)
     plt.close(fig)
     return path
@@ -10006,6 +10207,11 @@ def generate_report(
                     baseline_label="Greedy",
                 )),
                 str(plot_mode_raw_vs_executed_compare(baseline_metrics)),
+                str(plot_power_split_compare(
+                    baseline_metrics,
+                    baseline_metrics,
+                    baseline_label="Greedy",
+                )),
                 str(plot_min_rate_satisfied_count_compare(
                     baseline_metrics,
                     baseline_metrics,
@@ -10082,6 +10288,11 @@ def generate_report(
                     baseline_label="Greedy",
                 )),
                 str(plot_mode_raw_vs_executed_compare(rl_metrics)),
+                str(plot_power_split_compare(
+                    rl_metrics,
+                    baseline_metrics,
+                    baseline_label="Greedy",
+                )),
                 str(plot_min_rate_satisfied_count_compare(
                     rl_metrics,
                     baseline_metrics,
@@ -10439,6 +10650,7 @@ def generate_report(
         'throughput_only_greedy',
         'rate_loss_min_greedy',
         'force_admit_minloss_greedy',
+        'pure_force_admit_globaltp_greedy',
         'channel_only_greedy',
     }:
         selected_mode = 'original'
@@ -10471,6 +10683,9 @@ def generate_report(
     elif selected_mode == 'force_admit_minloss_greedy':
         greedy_metrics = greedy_bundle['force_admit_minloss_greedy']
         greedy_rep = greedy_reps['force_admit_minloss_greedy']
+    elif selected_mode == 'pure_force_admit_globaltp_greedy':
+        greedy_metrics = greedy_bundle['pure_force_admit_globaltp_greedy']
+        greedy_rep = greedy_reps['pure_force_admit_globaltp_greedy']
     elif selected_mode == 'hard_feasible_throughput_greedy':
         greedy_metrics = greedy_bundle['hard_feasible_throughput_greedy']
         greedy_rep = greedy_reps['hard_feasible_throughput_greedy']

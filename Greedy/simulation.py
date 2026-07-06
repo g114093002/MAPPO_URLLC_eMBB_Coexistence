@@ -65,10 +65,28 @@ class MultiUAVSimulation:
                 'urllc_poisson_rate',
                 max(self.sim_cfg.urllc_arrival_prob * num_urllc, 0.0)
             )
-            arrival_count = int(np.random.poisson(poisson_rate))
+            arrival_mode = str(getattr(self.sim_cfg, 'urllc_arrival_mode', 'bernoulli') or 'bernoulli').strip().lower()
             urllc_packet_sources = np.asarray([], dtype=int)
-            if arrival_count > 0:
-                urllc_packet_sources = np.random.choice(num_urllc, size=arrival_count, replace=True)
+            if arrival_mode == 'full_buffer':
+                packet_src = [
+                    np.arange(num_urllc, dtype=int)
+                    for _ in range(int(max(self.sys_cfg.num_minislots, 1)))
+                ]
+                urllc_packet_sources = np.concatenate(packet_src).astype(int, copy=False) if packet_src else np.asarray([], dtype=int)
+            elif arrival_mode == 'bernoulli':
+                tx_prob = float(np.clip(getattr(self.sim_cfg, 'urllc_bernoulli_tx_prob', 0.5), 0.0, 1.0))
+                packet_src = []
+                for minislot in range(int(max(self.sys_cfg.num_minislots, 1))):
+                    active_mask = np.random.rand(num_urllc) < tx_prob
+                    active_users = np.where(active_mask)[0].astype(int, copy=False)
+                    if active_users.size > 0:
+                        packet_src.append(active_users)
+                if packet_src:
+                    urllc_packet_sources = np.concatenate(packet_src).astype(int, copy=False)
+            else:
+                arrival_count = int(np.random.poisson(poisson_rate))
+                if arrival_count > 0:
+                    urllc_packet_sources = np.random.choice(num_urllc, size=arrival_count, replace=True)
         else:
             urllc_packet_sources = np.asarray([], dtype=int)
 
@@ -402,10 +420,28 @@ class MultiUAVSimulation:
                 'urllc_poisson_rate',
                 max(self.sim_cfg.urllc_arrival_prob * num_urllc, 0.0)
             )
-            arrival_count = int(np.random.poisson(poisson_rate))
             urllc_packet_sources = np.asarray([], dtype=int)
-            if arrival_count > 0:
-                urllc_packet_sources = np.random.choice(num_urllc, size=arrival_count, replace=True)
+            arrival_mode = str(getattr(self.sim_cfg, 'urllc_arrival_mode', 'bernoulli') or 'bernoulli').strip().lower()
+            if arrival_mode == 'full_buffer':
+                packet_src = [
+                    np.arange(num_urllc, dtype=int)
+                    for _ in range(int(max(self.sys_cfg.num_minislots, 1)))
+                ]
+                urllc_packet_sources = np.concatenate(packet_src).astype(int, copy=False) if packet_src else np.asarray([], dtype=int)
+            elif arrival_mode == 'bernoulli':
+                tx_prob = float(np.clip(getattr(self.sim_cfg, 'urllc_bernoulli_tx_prob', 0.5), 0.0, 1.0))
+                packet_src = []
+                for minislot in range(int(max(self.sys_cfg.num_minislots, 1))):
+                    active_mask = np.random.rand(num_urllc) < tx_prob
+                    active_users = np.where(active_mask)[0].astype(int, copy=False)
+                    if active_users.size > 0:
+                        packet_src.append(active_users)
+                if packet_src:
+                    urllc_packet_sources = np.concatenate(packet_src).astype(int, copy=False)
+            else:
+                arrival_count = int(np.random.poisson(poisson_rate))
+                if arrival_count > 0:
+                    urllc_packet_sources = np.random.choice(num_urllc, size=arrival_count, replace=True)
         else:
             urllc_packet_sources = np.asarray([], dtype=int)
 

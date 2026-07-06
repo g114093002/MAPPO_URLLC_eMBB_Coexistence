@@ -20,7 +20,7 @@ from .baseline_catalog import (
     baseline_narrative as _shared_baseline_narrative,
     normalize_baseline_mode as _shared_normalize_baseline_mode,
 )
-from .config import SRMAPPOConfig, cfg_from_dict
+from .config import SRMAPPOConfig, cfg_from_dict, torch_load_checkpoint
 from .env import SRMAPPOPhaseAEnv
 from .evaluate import rollout_episode
 from .experiments import EXPERIMENT_CHOICES, apply_experiment_preset, experiment_label
@@ -60,7 +60,11 @@ def _write_compare_manifest(payload: Dict[str, object]) -> Path:
 
 def _build_main_like_configs() -> Tuple[SystemConfig, URLLCConfig, eMBBConfig, AlgorithmConfig, SimulationConfig]:
     sys_cfg = SystemConfig()
-    sys_cfg.num_subcarriers = 12
+    num_subcarriers_override = os.environ.get("SR_MAPPO_NUM_SUBCARRIERS", "").strip()
+    bandwidth_override = os.environ.get("SR_MAPPO_TOTAL_BANDWIDTH_HZ", "").strip()
+    sys_cfg.num_subcarriers = int(num_subcarriers_override) if num_subcarriers_override else 12
+    if bandwidth_override:
+        sys_cfg.bandwidth = float(bandwidth_override)
     sys_cfg.num_embb_users = 20
     sys_cfg.num_urllc_users = 8
     sys_cfg.shadowing_std = 6.0
@@ -68,7 +72,7 @@ def _build_main_like_configs() -> Tuple[SystemConfig, URLLCConfig, eMBBConfig, A
     sys_cfg.refresh_derived_params()
 
     urllc_cfg = URLLCConfig()
-    urllc_cfg.packet_lengths = [120, 150, 180]
+    urllc_cfg.packet_lengths = [24, 24, 24]
     urllc_cfg.target_error_probability = 1e-3
     urllc_cfg.power_limits = [26] * sys_cfg.num_urllc_users
 
@@ -338,7 +342,7 @@ def _load_frozen_greedy_payload(cfg: SRMAPPOConfig) -> Dict:
 
 
 def _load_checkpoint_cfg(checkpoint_path: Path) -> SRMAPPOConfig:
-    payload = torch.load(checkpoint_path, map_location='cpu')
+    payload = torch_load_checkpoint(checkpoint_path, map_location='cpu')
     return cfg_from_dict(payload.get('cfg'))
 
 
@@ -507,7 +511,7 @@ def _summary_from_slot_result(result_slot: Dict, sys_cfg: SystemConfig) -> Dict[
 def _build_model_for_env(env: SRMAPPOPhaseAEnv, rl_cfg: SRMAPPOConfig, checkpoint_path: Path) -> SRMAPPOActorCritic:
     model = SRMAPPOActorCritic(env.local_obs_dim, env.global_obs_dim, rl_cfg)
     device = torch.device(rl_cfg.training.device)
-    payload = torch.load(checkpoint_path, map_location=device)
+    payload = torch_load_checkpoint(checkpoint_path, map_location=device)
     model.load_state_dict(payload['model_state_dict'])
     model.to(device)
     model.eval()
@@ -796,7 +800,7 @@ def run_comparison(
 
     greedy_mode = _greedy_baseline_mode(rl_cfg)
     greedy_label = _baseline_label(greedy_mode)
-    checkpoint_cfg = cfg_from_dict(torch.load(checkpoint, map_location='cpu').get('cfg'))
+    checkpoint_cfg = cfg_from_dict(torch_load_checkpoint(checkpoint, map_location='cpu').get('cfg'))
     rl_cfg.env.fixed_embb_baseline_policy = checkpoint_cfg.env.fixed_embb_baseline_policy
     print('Running Greedy density analysis for direct comparison...')
     if greedy_mode == "matched_fixed_embb":

@@ -59,7 +59,16 @@ class RewardConfig:
     overlay_when_lower_intercell_puncture_available_penalty_weight: float = 0.0
     missed_feasible_puncture_penalty_weight: float = 0.0
     power_penalty_scale: float = 0.01
+    power_penalty_soft_budget: float = 0.0
+    power_penalty_use_squared_hinge: bool = False
     overlay_power_surcharge_weight: float = 0.0
+    conditional_overlay_regret_penalty_weight: float = 0.0
+    conditional_mode_regret_penalty_weight: float = 0.0
+    w_soft_paired_mode_regret: float = 0.0
+    soft_paired_mode_regret_embb_loss_margin: float = 0.01
+    soft_paired_mode_regret_beta_power: float = 2.0
+    soft_paired_mode_regret_beta_reliability: float = 2.0
+    soft_paired_mode_regret_eps: float = 1.0e-8
     # Step-level intercell-aware penalty: penalize outgoing intercell interference deltas versus eMBB-only baseline.
     # Normalized by `terminal_intercell_penalty_normalizer`.
     step_intercell_outgoing_delta_penalty_weight: float = 0.0
@@ -85,8 +94,19 @@ class RewardConfig:
     terminal_embb_rate_weight: float = 1.50
     terminal_urllc_admission_weight: float = 4.00
     terminal_urllc_admission_target: float = 0.78
+    terminal_urllc_admission_log_alpha: float = 0.0
     terminal_urllc_admission_penalty: float = 12.00
+    terminal_urllc_admission_use_target_aware_linear: bool = False
+    terminal_urllc_admission_tail_weight_ratio: float = 1.0
     terminal_urllc_reliability_floor: float = 0.0
+    terminal_embb_surplus_bonus_weight: float = 0.0
+    terminal_embb_rate_guardrail_penalty_weight: float = 0.0
+    terminal_embb_rate_target_ratio: float = 0.0
+    terminal_embb_rate_guardrail_eps: float = 1.0e-8
+    step_embb_deficit_weight: float = 0.0
+    step_embb_deficit_target_ratio: float = 0.0
+    step_embb_deficit_eps: float = 1.0e-8
+    step_embb_deficit_use_squared_hinge: bool = True
     terminal_urllc_reliability_shortfall_penalty_weight: float = 0.0
     terminal_urllc_reliability_hard_violation_penalty: float = 0.0
     terminal_embb_fairness_weight: float = 0.00
@@ -145,6 +165,12 @@ class RewardConfig:
     planning_embb_min_rate_weight: float = 0.0
     planning_embb_fairness_weight: float = 0.0
     planning_cell_edge_weight: float = 0.0
+    planning_phase0_intercell_penalty_weight: float = 0.0
+    planning_phase0_intercell_over_noise_normalizer: float = 1.0e4
+    planning_phase0_blocked_user_penalty_weight: float = 0.0
+    planning_phase0_partial_minrate_penalty_weight: float = 0.0
+    planning_phase0_near_zero_user_penalty_weight: float = 0.0
+    planning_phase0_near_zero_rate_ratio: float = 0.35
     use_greedy_terminal_reference: bool = False
     greedy_terminal_reference_mode: str = "original"
 
@@ -270,12 +296,17 @@ class RewardConfig:
         "urgency_bonus",
         "embb_damage",
         "power_penalty",
+        "step_embb_rate_deficit_penalty",
+        "conditional_overlay_regret_penalty",
+        "conditional_mode_regret_penalty",
+        "soft_paired_mode_regret_penalty",
         "overlay_power_surcharge",
     ])
     allowed_terminal_reward_terms: List[str] = field(default_factory=lambda: [
         "terminal_embb_rate",
         "terminal_urllc_admission",
         "terminal_embb_min_rate_satisfaction_bonus",
+        "terminal_embb_rate_guardrail_penalty",
         "terminal_total_power_budget_penalty",
         "terminal_phase_a_raw_saturation_penalty",
     ])
@@ -288,6 +319,7 @@ class ShieldConfig:
     enable_action_masking: bool = True
     enable_feasibility_shield: bool = True
     apply_joint_reliability_rewrite: bool = True
+    apply_joint_minrate_rewrite: bool = False
     enable_greedy_fallback: bool = False
     force_power_to_feasible_minimum: bool = True
     resolve_packet_collisions: bool = False
@@ -326,6 +358,15 @@ class EnvAdapterConfig:
     multi_rb_agents: bool = False
     learn_embb_baseline: bool = False
     learn_phase0_embb_power: bool = True
+    # Phase-0 eMBB power parameterization:
+    # - "delta_scale": legacy per-RB residual scale around 1.0
+    # - "user_budget_weight": per-RB raw weight in [0,1], projected so that
+    #   each eMBB user's total RB power stays within its user power budget
+    phase0_embb_power_parameterization: str = "delta_scale"
+    # When True, Phase-0 eMBB power learning keeps each served eMBB user's
+    # total transmit power fixed at its power limit and uses the per-RB power
+    # head only to redistribute that fixed budget across the user's assigned RBs.
+    phase0_fixed_total_user_power_split: bool = False
     force_embb_owner_per_rb: bool = True
     # Debug: freeze Phase-0 owner learning to the baseline snapshot owner map.
     freeze_phase0_owner_to_snapshot: bool = False
@@ -385,10 +426,21 @@ class EnvAdapterConfig:
     # to satisfy min-rate for all eMBB users before entering throughput
     # candidate comparison. If unmet, KEEP is selected directly.
     greedy_hf_require_pre_admission_all_embb_min_rate: bool = False
+    # When True, Phase-A admission feasibility protects the fixed Phase-0
+    # eMBB user set that was both non-blocked and already above min-rate.
+    # This applies to both greedy masking/gating and MAPPO action masks.
+    phase_a_protect_phase0_satisfied_embb_users: bool = True
     # Build eMBB baseline in two stages:
     # 1) min-rate feasibility-first allocation
     # 2) throughput enhancement for remaining RBs
     phase0_embb_baseline_minrate_first: bool = False
+    # How to choose the per-user Phase-0 serving UAV for eMBB baseline builders:
+    # - channel_best: keep the reset-time strongest-channel UAV association
+    # - throughput:   choose the UAV with the largest estimated standalone eMBB throughput
+    phase0_embb_uav_assignment_mode: str = "channel_best"
+    # Optional geometry/topology profile applied before simulation/channel objects are built.
+    # Empty string keeps the legacy deployment.
+    geometry_profile: str = ""
     # Export per-eMBB-user rate arrays in report metrics (large payload).
     report_export_embb_user_rates: bool = False
     # URLLC Poisson arrival semantics:
@@ -402,6 +454,14 @@ class EnvAdapterConfig:
     # - True:  urllc_poisson_rate is already a minislot-level lambda, matching
     #   older report lines whose total arrivals scaled with num_minislots.
     urllc_poisson_rate_is_slot_level: bool = False
+    # URLLC arrival model:
+    # - "full_buffer": every URLLC user sends exactly one packet per minislot
+    # - "bernoulli": each URLLC user independently either sends 0/1 packet per minislot
+    # - "poisson": legacy count-based Poisson arrival model
+    urllc_arrival_mode: str = "full_buffer"
+    # When urllc_arrival_mode == "bernoulli", each URLLC user independently
+    # transmits in each minislot with this fixed probability.
+    urllc_bernoulli_tx_prob: float = 0.5
     # When nested-load user subsets are enabled, sample per-class (eMBB/URLLC)
     # user indices with near-equal per-UAV counts to reduce association skew noise.
     nested_balance_user_split_across_uavs: bool = True
@@ -429,10 +489,28 @@ class EnvAdapterConfig:
     # Report/debug option: keep channel gains fixed across episodes; only
     # URLLC arrivals vary with per-episode random seed.
     freeze_channel_gains_across_episodes: bool = False
+    # Use a small deterministic mother-scene bank during training/debug.
+    # Each reset seed maps to one cached scene id in [0, K-1].
+    # Set <= 0 to disable.
+    mother_topology_scene_bank_size: int = 0
+    # Optional offset so multiple experiments can use disjoint scene banks.
+    mother_topology_scene_bank_seed_offset: int = 0
     include_frontier_progress_obs: bool = False
     include_quota_progress_obs: bool = False
     include_rb_summary_observation: bool = True
     simplified_rb_summary_observation: bool = False
+    # Optional Phase-A observation augmentation:
+    # expose current global eMBB retention/min-rate health so the policy can
+    # judge how much margin remains before admitting more URLLC packets.
+    include_global_embb_health_in_obs: bool = False
+    # Optional candidate augmentation:
+    # expose per-candidate global eMBB retention/intercell consequences for
+    # overlay and puncture directly in the observation instead of relying only
+    # on local proxy utilities/losses.
+    include_candidate_global_consequence_in_obs: bool = False
+    # Optional candidate augmentation:
+    # expose explicit interference/SINR decomposition in the observation.
+    include_candidate_interference_context_in_obs: bool = False
     # Legacy-compatibility toggle: newer code can project the partial-reuse
     # pattern directly into the fixed eMBB baseline owner/rate tensors before
     # Phase-A starts. Keep this off by default so clean training stays closer
@@ -455,7 +533,12 @@ class EnvAdapterConfig:
     phase0_owner_change_ratio_start: float = 0.05
     phase0_owner_change_ratio_end: float = 0.30
     phase0_owner_change_warmup_iters: int = 1000
+    phase0_owner_mask_pruning_enabled: bool = False
+    phase0_owner_positive_only_gate_enabled: bool = True
+    phase0_owner_soft_safety_commit_enabled: bool = False
+    phase0_owner_objective_mode: str = "local_mixed"  # "local_mixed" or "global_delta_guarded"
     phase0_owner_objective_eps: float = 1.0e-9
+    phase0_owner_objective_global_rate_normalizer_bps: float = 1.0e6
     phase0_owner_objective_w_service: float = 1.75
     phase0_owner_objective_w_minrate: float = 1.50
     phase0_owner_objective_w_rate: float = 0.50
@@ -466,6 +549,10 @@ class EnvAdapterConfig:
     owner_objective_adaptive_k: float = 0.7
     owner_objective_relax_margin: float = 0.5
     owner_max_negative_accept_ratio: float = 0.30
+    phase0_owner_soft_negative_accept_ratio: float = 0.20
+    phase0_owner_soft_negative_objective_floor: float = -0.10
+    phase0_owner_hard_negative_objective_floor: float = -0.75
+    phase0_owner_mask_prune_hard_negative_only: bool = False
     owner_service_drop_tol: float = 0.01
     owner_intercell_increase_tol: float = 0.02
     phase0_owner_change_budget_mode: str = "committed_only"  # "committed_only" or "full_snapshot_legacy"
@@ -493,6 +580,7 @@ class EnvAdapterConfig:
     phase0_finalize_apply_snapshot_minrate_lock: bool = True
     phase0_finalize_restore_snapshot_on_minrate_count_regression: bool = True
     phase0_finalize_restore_snapshot_on_minrate_infeasible: bool = True
+    phase0_finalize_enable_deficit_repair: bool = True
 
     # Inter-cell aware power projection (optional; used by service+interference repair presets).
     intercell_aware_power_projection: bool = False
@@ -529,14 +617,17 @@ class EnvAdapterConfig:
     overlay_dominance_guard_max_overlay_vs_puncture_intercell_ratio: float = 1.0
     good_overlay_retention_threshold: float = 0.85
     good_overlay_intercell_ratio_to_local_min: float = 1.5
+    # Compare-time greedy-only overlay gate. Set <= 0 to disable.
+    compare_greedy_overlay_retention_threshold: float = 0.95
+    compare_pure_superposition_overlay_retention_threshold: float = 0.90
     # Supported snapshot builders:
     # - global_sumrate_only: Phase-0 pure aggregate eMBB sum-rate maximization
     # - global_throughput_consistent: throughput-oriented with extra consistency penalties
     # - global_pressure_aware: throughput with added service/pressure shaping
     # - deterministic_max_gain, balanced_round_robin, greedy
     fixed_embb_baseline_policy: str = "global_sumrate_only"
-    embb_power_scale_min: float = 0.80
-    embb_power_scale_max: float = 1.10
+    embb_power_scale_min: float = 0.60
+    embb_power_scale_max: float = 1.00
     # Overlay quality gates (throughput-aware). These make overlay feasible
     # only if it preserves enough eMBB rate in the current cell.
     min_overlay_retention: float = 0.0
@@ -733,6 +824,25 @@ class TrainingConfig:
     balanced_checkpoint_throughput_weight: float = 0.80
     balanced_checkpoint_admission_weight: float = 0.20
     balanced_checkpoint_power_penalty_weight: float = 0.0
+    clean_eval_embb_blocked_weight: float = 0.0
+    clean_eval_urllc_blocked_weight: float = 0.0
+    clean_eval_power_weight: float = 0.0
+    clean_eval_throughput_weight: float = 0.0
+    clean_eval_admission_weight: float = 0.0
+    clean_eval_minrate_weight: float = 0.0
+    clean_eval_phase0_blocked_weight: float = 0.0
+    clean_eval_phase0_partial_minrate_weight: float = 0.0
+    clean_eval_final_blocked_weight: float = 0.0
+    clean_eval_phasea_new_blocked_weight: float = 0.0
+    clean_eval_intercell_over_noise_weight: float = 0.0
+    clean_eval_intercell_over_noise_normalizer: float = 1.0e4
+    clean_eval_phase0_refill_gain_weight: float = 0.0
+    clean_eval_phase0_refill_intercell_weight: float = 0.0
+    clean_eval_jain_weight: float = 0.0
+    clean_eval_5th_percentile_weight: float = 0.0
+    clean_eval_5th_percentile_normalizer_mbps: float = 1.0
+    clean_eval_throughput_floor_ratio: float = 0.0
+    clean_eval_throughput_floor_penalty_weight: float = 0.0
     hardest_load_sampling_bias: float = 0.70
     second_hardest_load_sampling_bias: float = 0.20
     clean_stress_eval_enabled: bool = False

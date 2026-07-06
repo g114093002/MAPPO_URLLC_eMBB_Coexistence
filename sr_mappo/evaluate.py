@@ -1547,6 +1547,10 @@ def evaluate_policy_only(env, model, cfg) -> Dict[str, float]:
             'policy_mean_phase0_owner_same_as_snapshot_ratio': _mean(policy_metrics, 'phase0_owner_same_as_snapshot_ratio'),
             'policy_mean_phase0_owner_effective_service_gain_ratio': _mean(policy_metrics, 'phase0_owner_effective_service_gain_ratio'),
             'policy_mean_phase0_owner_effective_rate_gain_vs_snapshot_mean': _mean(policy_metrics, 'phase0_owner_effective_rate_gain_vs_snapshot_mean'),
+            'policy_mean_phase0_snapshot_embb_total_power': _mean(policy_metrics, 'phase0_snapshot_embb_total_power'),
+            'policy_mean_phase0_executed_embb_total_power': _mean(policy_metrics, 'phase0_executed_embb_total_power'),
+            'policy_mean_phase0_embb_power_delta_mean': _mean(policy_metrics, 'phase0_embb_power_delta_mean'),
+            'policy_mean_phase0_executed_vs_snapshot_power_ratio': _mean(policy_metrics, 'phase0_executed_vs_snapshot_power_ratio'),
             'policy_mean_phase0_owner_change_harmful_ratio': _mean(policy_metrics, 'phase0_owner_change_harmful_ratio'),
             'policy_mean_phase_a_power_raw_positive_ratio': _mean(policy_metrics, 'phase_a_power_raw_positive_ratio'),
             'policy_mean_phase_a_power_positive_clamped_to_zero_ratio': _mean(policy_metrics, 'phase_a_power_positive_clamped_to_zero_ratio'),
@@ -1721,11 +1725,107 @@ def evaluate_policy_only(env, model, cfg) -> Dict[str, float]:
         'policy_mean_phase0_owner_change_ratio_vs_snapshot_executed': float(
             np.mean([item.get('policy_mean_phase0_owner_change_ratio_vs_snapshot_executed', 0.0) for item in per_load])
         ) if per_load else 0.0,
+        'policy_mean_phase0_owner_fallback_to_candidate0_ratio': float(
+            np.mean([item.get('policy_mean_phase0_owner_fallback_to_candidate0_ratio', 0.0) for item in per_load])
+        ) if per_load else 0.0,
+        'policy_mean_phase0_owner_invalid_option_ratio': float(
+            np.mean([item.get('policy_mean_phase0_owner_invalid_option_ratio', 0.0) for item in per_load])
+        ) if per_load else 0.0,
+        'policy_mean_phase0_owner_null_selected_ratio': float(
+            np.mean([item.get('policy_mean_phase0_owner_null_selected_ratio', 0.0) for item in per_load])
+        ) if per_load else 0.0,
+        'policy_mean_phase0_owner_invalid_to_snapshot_ratio': float(
+            np.mean([item.get('policy_mean_phase0_owner_invalid_to_snapshot_ratio', 0.0) for item in per_load])
+        ) if per_load else 0.0,
+        'policy_mean_phase0_owner_invalid_to_non_snapshot_ratio': float(
+            np.mean([item.get('policy_mean_phase0_owner_invalid_to_non_snapshot_ratio', 0.0) for item in per_load])
+        ) if per_load else 0.0,
+        'policy_mean_phase0_owner_restored_to_snapshot_ratio': float(
+            np.mean([item.get('policy_mean_phase0_owner_restored_to_snapshot_ratio', 0.0) for item in per_load])
+        ) if per_load else 0.0,
+        'policy_mean_phase0_owner_replaced_with_non_snapshot_ratio': float(
+            np.mean([item.get('policy_mean_phase0_owner_replaced_with_non_snapshot_ratio', 0.0) for item in per_load])
+        ) if per_load else 0.0,
+        'policy_mean_phase0_owner_non_null_ratio_raw': float(
+            np.mean([item.get('policy_mean_phase0_owner_non_null_ratio_raw', 0.0) for item in per_load])
+        ) if per_load else 0.0,
+        'policy_mean_phase0_owner_non_null_ratio_executed': float(
+            np.mean([item.get('policy_mean_phase0_owner_non_null_ratio_executed', 0.0) for item in per_load])
+        ) if per_load else 0.0,
+        'policy_mean_phase0_owner_changed_and_effective_ratio': float(
+            np.mean([item.get('policy_mean_phase0_owner_changed_and_effective_ratio', 0.0) for item in per_load])
+        ) if per_load else 0.0,
+        'policy_mean_phase0_owner_effective_rate_gain_vs_snapshot_mean': float(
+            np.mean([item.get('policy_mean_phase0_owner_effective_rate_gain_vs_snapshot_mean', 0.0) for item in per_load])
+        ) if per_load else 0.0,
+        'policy_mean_phase0_snapshot_embb_total_power': float(
+            np.mean([item.get('policy_mean_phase0_snapshot_embb_total_power', 0.0) for item in per_load])
+        ) if per_load else 0.0,
+        'policy_mean_phase0_executed_embb_total_power': float(
+            np.mean([item.get('policy_mean_phase0_executed_embb_total_power', 0.0) for item in per_load])
+        ) if per_load else 0.0,
+        'policy_mean_phase0_embb_power_delta_mean': float(
+            np.mean([item.get('policy_mean_phase0_embb_power_delta_mean', 0.0) for item in per_load])
+        ) if per_load else 0.0,
+        'policy_mean_phase0_executed_vs_snapshot_power_ratio': float(
+            np.mean([item.get('policy_mean_phase0_executed_vs_snapshot_power_ratio', 0.0) for item in per_load])
+        ) if per_load else 0.0,
+        'policy_mean_phase0_owner_effective_rate_gain_vs_snapshot_cells_mean_mbps': float(
+            np.mean([item.get('policy_mean_phase0_owner_effective_rate_gain_vs_snapshot_cells_mean_mbps', 0.0) for item in per_load])
+        ) if per_load else 0.0,
+        'policy_mean_phase0_owner_change_harmful_ratio': float(
+            np.mean([item.get('policy_mean_phase0_owner_change_harmful_ratio', 0.0) for item in per_load])
+        ) if per_load else 0.0,
+        'policy_mean_owner_snapshot_fallback_taken': float(
+            np.mean([item.get('policy_mean_owner_snapshot_fallback_taken', 0.0) for item in per_load])
+        ) if per_load else 0.0,
         'policy_mean_phase0_owner_change_budget_allowed': float(
             np.mean([item.get('policy_mean_phase0_owner_change_budget_allowed', 0.0) for item in per_load])
         ) if per_load else 0.0,
         'policy_mean_phase0_owner_change_budget_clipped_ratio': float(
             np.mean([item.get('policy_mean_phase0_owner_change_budget_clipped_ratio', 0.0) for item in per_load])
+        ) if per_load else 0.0,
+        'policy_mean_phase0_owner_candidate_positive_objective_ratio': float(
+            np.mean([item.get('policy_mean_phase0_owner_candidate_positive_objective_ratio', 0.0) for item in per_load])
+        ) if per_load else 0.0,
+        'policy_mean_phase0_owner_accepted_positive_objective_ratio': float(
+            np.mean([item.get('policy_mean_phase0_owner_accepted_positive_objective_ratio', 0.0) for item in per_load])
+        ) if per_load else 0.0,
+        'policy_mean_phase0_owner_rejected_nonpositive_objective_ratio': float(
+            np.mean([item.get('policy_mean_phase0_owner_rejected_nonpositive_objective_ratio', 0.0) for item in per_load])
+        ) if per_load else 0.0,
+        'policy_mean_phase0_owner_objective_gain_accepted_mean': float(
+            np.mean([item.get('policy_mean_phase0_owner_objective_gain_accepted_mean', 0.0) for item in per_load])
+        ) if per_load else 0.0,
+        'policy_mean_owner_negative_but_accepted_ratio': float(
+            np.mean([item.get('policy_mean_owner_negative_but_accepted_ratio', 0.0) for item in per_load])
+        ) if per_load else 0.0,
+        'policy_mean_owner_neg_accepted_with_positive_candidate_ratio': float(
+            np.mean([item.get('policy_mean_owner_neg_accepted_with_positive_candidate_ratio', 0.0) for item in per_load])
+        ) if per_load else 0.0,
+        'policy_mean_owner_negative_blocked_due_to_quota_ratio': float(
+            np.mean([item.get('policy_mean_owner_negative_blocked_due_to_quota_ratio', 0.0) for item in per_load])
+        ) if per_load else 0.0,
+        'policy_mean_owner_positive_shortage_ratio': float(
+            np.mean([item.get('policy_mean_owner_positive_shortage_ratio', 0.0) for item in per_load])
+        ) if per_load else 0.0,
+        'policy_mean_owner_selection_fill_ratio': float(
+            np.mean([item.get('policy_mean_owner_selection_fill_ratio', 0.0) for item in per_load])
+        ) if per_load else 0.0,
+        'policy_mean_owner_candidate_after_gate_ratio': float(
+            np.mean([item.get('policy_mean_owner_candidate_after_gate_ratio', 0.0) for item in per_load])
+        ) if per_load else 0.0,
+        'policy_mean_owner_obj_mean': float(
+            np.mean([item.get('policy_mean_owner_obj_mean', 0.0) for item in per_load])
+        ) if per_load else 0.0,
+        'policy_mean_owner_obj_std': float(
+            np.mean([item.get('policy_mean_owner_obj_std', 0.0) for item in per_load])
+        ) if per_load else 0.0,
+        'policy_mean_owner_gate_threshold': float(
+            np.mean([item.get('policy_mean_owner_gate_threshold', 0.0) for item in per_load])
+        ) if per_load else 0.0,
+        'policy_mean_owner_safe_relaxed_used_ratio': float(
+            np.mean([item.get('policy_mean_owner_safe_relaxed_used_ratio', 0.0) for item in per_load])
         ) if per_load else 0.0,
         'policy_mean_ph0_owner_raw_non_snapshot_ratio': float(
             np.mean([item.get('policy_mean_ph0_owner_raw_non_snapshot_ratio', 0.0) for item in per_load])

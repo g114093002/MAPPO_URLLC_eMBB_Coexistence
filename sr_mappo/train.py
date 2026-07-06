@@ -5,7 +5,7 @@ import importlib.util
 from pathlib import Path
 from pprint import pprint
 
-from .config import SRMAPPOConfig
+from .config import SRMAPPOConfig, torch_load_checkpoint
 from .evaluate import evaluate_dual_selection, rescreen_checkpoints_for_report
 from .experiments import EXPERIMENT_CHOICES, apply_experiment_preset, experiment_label
 from .report import generate_report
@@ -59,7 +59,7 @@ def run_default_training(
         payload = SRMAPPOConfig()
         try:
             import torch
-            ckpt = torch.load(resume_target, map_location='cpu')
+            ckpt = torch_load_checkpoint(resume_target, map_location='cpu')
             extra = ckpt.get('extra', {}) or {}
             resume_iter = int(extra.get('iteration', 0))
             cfg.training.total_iterations = int(resume_iter + additional_iterations)

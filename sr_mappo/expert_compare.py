@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-from sr_mappo.config import SRMAPPOConfig
+from sr_mappo.config import SRMAPPOConfig, torch_load_checkpoint
 from sr_mappo.evaluate import _evaluate_one_load
 from sr_mappo.report import (
     CHECKPOINT_DIR,
@@ -36,7 +36,7 @@ def compatible_checkpoints() -> List[Path]:
     compatible = []
     for path in candidates:
         try:
-            payload = torch.load(path, map_location=cfg.training.device)
+            payload = torch_load_checkpoint(path, map_location=cfg.training.device)
             model.load_state_dict(payload['model_state_dict'])
             compatible.append(path)
         except Exception:
@@ -50,7 +50,7 @@ def screen_checkpoints(loads: List[float]) -> List[Dict]:
     env, model, _trainer = build_default_components(cfg)
     screened = []
     for ckpt in compatible_checkpoints():
-        payload = torch.load(ckpt, map_location=cfg.training.device)
+        payload = torch_load_checkpoint(ckpt, map_location=cfg.training.device)
         model.load_state_dict(payload['model_state_dict'])
         per_load = []
         for load_idx, load in enumerate(loads):

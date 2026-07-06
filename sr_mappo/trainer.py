@@ -14,6 +14,7 @@ import torch.nn.functional as F
 
 from .bc import GreedyWarmStartTrainer, collect_greedy_bc_dataset
 from .buffer import SharedRolloutBuffer
+from .config import torch_load_checkpoint
 from .load_aware import nearest_reference_load
 from .types import HybridAction, MODE_KEEP, MODE_OVERLAY, MODE_PUNCTURE, ShieldedAction
 
@@ -32,9 +33,30 @@ class TrainerStats:
     phase_a_embb_power_anchor_loss: float
 
 
-def _delta_to_pre_tanh(power_delta: np.ndarray) -> np.ndarray:
-    clipped = np.clip(np.asarray(power_delta, dtype=np.float32), -0.999999, 0.999999)
-    return np.arctanh(clipped).astype(np.float32)
+def _delta_to_pre_tanh(
+    power_delta: np.ndarray,
+    *,
+    planning_phase_mask: Optional[np.ndarray] = None,
+    phase0_user_budget_weight: bool = False,
+) -> np.ndarray:
+    delta = np.asarray(power_delta, dtype=np.float32)
+    out = np.zeros_like(delta, dtype=np.float32)
+    if planning_phase_mask is None:
+        planning_mask = np.zeros_like(delta, dtype=bool)
+    else:
+        planning_mask = np.asarray(planning_phase_mask, dtype=bool).reshape(delta.shape)
+    phase_a_mask = ~planning_mask
+    if np.any(phase_a_mask):
+        clipped = np.clip(delta[phase_a_mask], -0.999999, 0.999999)
+        out[phase_a_mask] = np.arctanh(clipped).astype(np.float32)
+    if np.any(planning_mask):
+        if phase0_user_budget_weight:
+            clipped = np.clip(delta[planning_mask], 1.0e-6, 1.0 - 1.0e-6)
+            out[planning_mask] = np.log(clipped / np.clip(1.0 - clipped, 1.0e-6, None)).astype(np.float32)
+        else:
+            clipped = np.clip(delta[planning_mask], -0.999999, 0.999999)
+            out[planning_mask] = np.arctanh(clipped).astype(np.float32)
+    return out.astype(np.float32)
 
 
 def _ensure_env_base_profile(env) -> Dict[str, float]:
@@ -62,7 +84,23 @@ def configure_env_for_users_per_uav(env, target_users_per_uav: float) -> float:
     total_users = max(1, int(round(profile['base_total_per_uav'] * env.sys_cfg.num_uavs * scale)))
     urllc_ratio = float(getattr(env.sim_cfg, 'urllc_user_ratio', 0.0))
     urllc_ratio = float(np.clip(urllc_ratio, 0.0, 0.95))
-    if urllc_ratio > 0.0:
+    explicit_mix_weights = getattr(env.sim_cfg, "explicit_user_mix_weights", None)
+    if isinstance(explicit_mix_weights, (tuple, list)) and len(explicit_mix_weights) >= 2:
+        try:
+            embb_weight = max(float(explicit_mix_weights[0]), 0.0)
+            urllc_weight = max(float(explicit_mix_weights[1]), 0.0)
+        except Exception:
+            embb_weight = 0.0
+            urllc_weight = 0.0
+        mix_total = float(embb_weight + urllc_weight)
+        if mix_total > 0.0:
+            env.sys_cfg.num_urllc_users = int(round(total_users * (urllc_weight / mix_total)))
+            env.sys_cfg.num_urllc_users = int(np.clip(env.sys_cfg.num_urllc_users, 0, total_users))
+            env.sys_cfg.num_embb_users = max(total_users - env.sys_cfg.num_urllc_users, 0)
+        else:
+            env.sys_cfg.num_embb_users = total_users
+            env.sys_cfg.num_urllc_users = 0
+    elif urllc_ratio > 0.0:
         env.sys_cfg.num_urllc_users = max(1, int(round(total_users * urllc_ratio)))
         env.sys_cfg.num_embb_users = max(1, total_users - env.sys_cfg.num_urllc_users)
     else:
@@ -967,6 +1005,9 @@ def _compute_aux_targets(
     agent_ids: List[str],
     env=None,
     target_policy: str = "best_utility",
+    need_best_mode_target: bool = True,
+    need_overlay_target: bool = True,
+    need_best_packet_target: bool = True,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     best_mode_targets = []
     overlay_available_targets = []
@@ -974,56 +1015,60 @@ def _compute_aux_targets(
     policy = str(target_policy or "best_utility").strip().lower()
     for agent_id in agent_ids:
         obs = observations[agent_id]
-        overlay_available_targets.append(float(any(candidate.overlay_feasible for candidate in obs.candidates)))
+        if need_overlay_target:
+            overlay_available_targets.append(float(any(candidate.overlay_feasible for candidate in obs.candidates)))
+        else:
+            overlay_available_targets.append(0.0)
         best_mode = MODE_KEEP
         best_packet = 0
-        if policy in {"throughput_feasible_oracle", "oracle", "throughput_first"} and env is not None:
-            candidate, best_mode, _best_score = env._best_local_candidate_throughput_first(obs.candidates)
-            if candidate is not None and best_mode != MODE_KEEP:
-                try:
-                    best_packet = obs.candidates.index(candidate) + 1
-                except ValueError:
+        if need_best_mode_target or need_best_packet_target:
+            if policy in {"throughput_feasible_oracle", "oracle", "throughput_first"} and env is not None:
+                candidate, best_mode, _best_score = env._best_local_candidate_throughput_first(obs.candidates)
+                if candidate is not None and best_mode != MODE_KEEP:
+                    try:
+                        best_packet = obs.candidates.index(candidate) + 1
+                    except ValueError:
+                        best_packet = 0
+                else:
+                    best_mode = MODE_KEEP
+                    best_packet = 0
+            elif policy == "load_aware_balanced_oracle" and env is not None:
+                candidate, best_mode, _best_score = env._best_local_candidate_load_aware_balanced(
+                    obs.candidates,
+                    actual_load=env._current_actual_load(),
+                )
+                if candidate is not None and best_mode != MODE_KEEP:
+                    try:
+                        best_packet = obs.candidates.index(candidate) + 1
+                    except ValueError:
+                        best_packet = 0
+                else:
+                    best_mode = MODE_KEEP
+                    best_packet = 0
+            elif policy in {"frontier_throughput_admission_oracle", "frontier_oracle", "tp_admission_frontier"} and env is not None:
+                candidate, best_mode, _best_score = env._best_local_candidate_frontier_throughput_admission(
+                    obs.candidates,
+                    actual_load=env._current_actual_load(),
+                )
+                if candidate is not None and best_mode != MODE_KEEP:
+                    try:
+                        best_packet = obs.candidates.index(candidate) + 1
+                    except ValueError:
+                        best_packet = 0
+                else:
+                    best_mode = MODE_KEEP
                     best_packet = 0
             else:
-                best_mode = MODE_KEEP
-                best_packet = 0
-        elif policy == "load_aware_balanced_oracle" and env is not None:
-            candidate, best_mode, _best_score = env._best_local_candidate_load_aware_balanced(
-                obs.candidates,
-                actual_load=env._current_actual_load(),
-            )
-            if candidate is not None and best_mode != MODE_KEEP:
-                try:
-                    best_packet = obs.candidates.index(candidate) + 1
-                except ValueError:
+                best_utility = 0.0
+                for option_idx, candidate in enumerate(obs.candidates, start=1):
+                    utility = float(candidate.best_utility)
+                    if np.isfinite(utility) and utility > best_utility:
+                        best_utility = utility
+                        best_mode = int(candidate.best_mode)
+                        best_packet = option_idx
+                if best_utility <= 0.0:
+                    best_mode = MODE_KEEP
                     best_packet = 0
-            else:
-                best_mode = MODE_KEEP
-                best_packet = 0
-        elif policy in {"frontier_throughput_admission_oracle", "frontier_oracle", "tp_admission_frontier"} and env is not None:
-            candidate, best_mode, _best_score = env._best_local_candidate_frontier_throughput_admission(
-                obs.candidates,
-                actual_load=env._current_actual_load(),
-            )
-            if candidate is not None and best_mode != MODE_KEEP:
-                try:
-                    best_packet = obs.candidates.index(candidate) + 1
-                except ValueError:
-                    best_packet = 0
-            else:
-                best_mode = MODE_KEEP
-                best_packet = 0
-        else:
-            best_utility = 0.0
-            for option_idx, candidate in enumerate(obs.candidates, start=1):
-                utility = float(candidate.best_utility)
-                if np.isfinite(utility) and utility > best_utility:
-                    best_utility = utility
-                    best_mode = int(candidate.best_mode)
-                    best_packet = option_idx
-            if best_utility <= 0.0:
-                best_mode = MODE_KEEP
-                best_packet = 0
         best_mode_targets.append(int(best_mode))
         best_packet_targets.append(int(best_packet))
     return (
@@ -1126,6 +1171,24 @@ class SRMAPPOTrainer:
         owner_policy_snapshot_prob_sum = 0.0
         owner_policy_non_snapshot_prob_sum = 0.0
         owner_policy_stat_count = 0
+        phase0_mode_logprob_sum = 0.0
+        phase0_packet_logprob_sum = 0.0
+        phase0_owner_logprob_sum = 0.0
+        phase0_embb_power_logprob_sum = 0.0
+        phase0_mode_entropy_sum = 0.0
+        phase0_packet_entropy_sum = 0.0
+        phase0_owner_entropy_sum = 0.0
+        phase0_embb_power_entropy_sum = 0.0
+        phase0_contrib_count = 0
+        phaseA_mode_logprob_sum = 0.0
+        phaseA_packet_logprob_sum = 0.0
+        phaseA_owner_logprob_sum = 0.0
+        phaseA_embb_power_logprob_sum = 0.0
+        phaseA_mode_entropy_sum = 0.0
+        phaseA_packet_entropy_sum = 0.0
+        phaseA_owner_entropy_sum = 0.0
+        phaseA_embb_power_entropy_sum = 0.0
+        phaseA_contrib_count = 0
         sampled_owner_option_sum = 0.0
         sampled_owner_option_total = 0
         sampled_owner_option_nonzero_count = 0
@@ -1211,6 +1274,9 @@ class SRMAPPOTrainer:
             and float(getattr(self.cfg.training, "phase_a_embb_power_anchor_weight", 0.0) or 0.0) > 1.0e-12
             and phase_a_embb_power_anchor_enabled(self.cfg, int(iteration))
         )
+        need_aux_best_mode_target = float(getattr(self.cfg.training, "aux_best_mode_coef", 0.0) or 0.0) > 1.0e-12
+        need_aux_overlay_target = float(getattr(self.cfg.training, "aux_overlay_feasible_coef", 0.0) or 0.0) > 1.0e-12
+        need_aux_best_packet_target = float(getattr(self.cfg.training, "aux_best_packet_coef", 0.0) or 0.0) > 1.0e-12
 
         while steps < horizon:
             obs_build_start = perf_counter()
@@ -1219,13 +1285,21 @@ class SRMAPPOTrainer:
             mode_mask_np = np.stack([observations[agent_id].masks.mode_mask for agent_id in self.env.agent_ids]).astype(np.float32)
             packet_mask_np = np.stack([observations[agent_id].masks.packet_mask for agent_id in self.env.agent_ids]).astype(np.float32)
             embb_owner_mask_np = np.stack([observations[agent_id].masks.embb_owner_mask for agent_id in self.env.agent_ids]).astype(np.float32)
-            aux_best_mode_target, aux_overlay_target, aux_best_packet_target = _compute_aux_targets(
-                observations,
-                self.env.agent_ids,
-                env=self.env,
-                target_policy=self.cfg.training.aux_target_policy,
-            )
             num_agents = len(self.env.agent_ids)
+            if need_aux_best_mode_target or need_aux_overlay_target or need_aux_best_packet_target:
+                aux_best_mode_target, aux_overlay_target, aux_best_packet_target = _compute_aux_targets(
+                    observations,
+                    self.env.agent_ids,
+                    env=self.env,
+                    target_policy=self.cfg.training.aux_target_policy,
+                    need_best_mode_target=need_aux_best_mode_target,
+                    need_overlay_target=need_aux_overlay_target,
+                    need_best_packet_target=need_aux_best_packet_target,
+                )
+            else:
+                aux_best_mode_target = np.zeros(num_agents, dtype=np.int64)
+                aux_overlay_target = np.zeros(num_agents, dtype=np.float32)
+                aux_best_packet_target = np.zeros(num_agents, dtype=np.int64)
             if need_teacher_distill_targets:
                 teacher_admission_target, teacher_mode_target, teacher_admission_weight, teacher_mode_weight = (
                     _teacher_distillation_targets(
@@ -1572,8 +1646,19 @@ class SRMAPPOTrainer:
                     packet_invalid_count += int(bool(resolved[agent_id].packet_invalid_fallback))
                     mask_invalid_count += int(bool(resolved[agent_id].mask_invalid_fallback))
                     joint_rewrite_count += int(bool(resolved[agent_id].joint_reliability_rewritten))
+            planning_phase_mask_np = np.asarray(
+                [bool(observations[agent_id].metadata.get("planning_phase", 0.0)) for agent_id in self.env.agent_ids],
+                dtype=bool,
+            )
             executed_power_pre_tanh = _delta_to_pre_tanh(executed_power_delta)
-            executed_embb_power_pre_tanh = _delta_to_pre_tanh(executed_embb_power_delta)
+            executed_embb_power_pre_tanh = _delta_to_pre_tanh(
+                executed_embb_power_delta,
+                planning_phase_mask=planning_phase_mask_np,
+                phase0_user_budget_weight=bool(
+                    str(getattr(self.cfg.env, "phase0_embb_power_parameterization", "delta_scale") or "delta_scale").strip().lower()
+                    == "user_budget_weight"
+                ),
+            )
             executed_eval = self.model.evaluate_actions(
                 local_obs=local_obs,
                 global_obs=global_obs,
@@ -1588,6 +1673,49 @@ class SRMAPPOTrainer:
                 actor_hidden=actor_hidden,
                 critic_hidden=critic_hidden,
             )
+            try:
+                planning_mask_t = executed_eval.get("planning_phase_active")
+                phase_a_mask_t = executed_eval.get("phase_a_active")
+                if planning_mask_t is not None and phase_a_mask_t is not None:
+                    planning_mask_np = planning_mask_t.detach().cpu().numpy().astype(bool)
+                    phase_a_mask_np = phase_a_mask_t.detach().cpu().numpy().astype(bool)
+                    contrib_keys = (
+                        "mode_log_prob_term",
+                        "packet_log_prob_term",
+                        "embb_owner_log_prob_term",
+                        "embb_power_log_prob_term",
+                        "mode_entropy_term",
+                        "packet_entropy_term",
+                        "embb_owner_entropy_term",
+                        "embb_power_entropy_term",
+                    )
+                    contrib = {
+                        key: executed_eval[key].detach().cpu().numpy()
+                        for key in contrib_keys
+                        if key in executed_eval
+                    }
+                    if np.any(planning_mask_np):
+                        phase0_mode_logprob_sum += float(np.sum(contrib["mode_log_prob_term"][planning_mask_np]))
+                        phase0_packet_logprob_sum += float(np.sum(contrib["packet_log_prob_term"][planning_mask_np]))
+                        phase0_owner_logprob_sum += float(np.sum(contrib["embb_owner_log_prob_term"][planning_mask_np]))
+                        phase0_embb_power_logprob_sum += float(np.sum(contrib["embb_power_log_prob_term"][planning_mask_np]))
+                        phase0_mode_entropy_sum += float(np.sum(contrib["mode_entropy_term"][planning_mask_np]))
+                        phase0_packet_entropy_sum += float(np.sum(contrib["packet_entropy_term"][planning_mask_np]))
+                        phase0_owner_entropy_sum += float(np.sum(contrib["embb_owner_entropy_term"][planning_mask_np]))
+                        phase0_embb_power_entropy_sum += float(np.sum(contrib["embb_power_entropy_term"][planning_mask_np]))
+                        phase0_contrib_count += int(np.count_nonzero(planning_mask_np))
+                    if np.any(phase_a_mask_np):
+                        phaseA_mode_logprob_sum += float(np.sum(contrib["mode_log_prob_term"][phase_a_mask_np]))
+                        phaseA_packet_logprob_sum += float(np.sum(contrib["packet_log_prob_term"][phase_a_mask_np]))
+                        phaseA_owner_logprob_sum += float(np.sum(contrib["embb_owner_log_prob_term"][phase_a_mask_np]))
+                        phaseA_embb_power_logprob_sum += float(np.sum(contrib["embb_power_log_prob_term"][phase_a_mask_np]))
+                        phaseA_mode_entropy_sum += float(np.sum(contrib["mode_entropy_term"][phase_a_mask_np]))
+                        phaseA_packet_entropy_sum += float(np.sum(contrib["packet_entropy_term"][phase_a_mask_np]))
+                        phaseA_owner_entropy_sum += float(np.sum(contrib["embb_owner_entropy_term"][phase_a_mask_np]))
+                        phaseA_embb_power_entropy_sum += float(np.sum(contrib["embb_power_entropy_term"][phase_a_mask_np]))
+                        phaseA_contrib_count += int(np.count_nonzero(phase_a_mask_np))
+            except Exception:
+                pass
             policy_forward_sec += perf_counter() - policy_forward_start
 
             env_step_start = perf_counter()
@@ -1760,6 +1888,22 @@ class SRMAPPOTrainer:
             'owner_policy_top1_prob_mean': float(owner_policy_top1_prob_sum / max(owner_policy_stat_count, 1)),
             'owner_policy_snapshot_prob_mean': float(owner_policy_snapshot_prob_sum / max(owner_policy_stat_count, 1)),
             'owner_policy_non_snapshot_prob_mean': float(owner_policy_non_snapshot_prob_sum / max(owner_policy_stat_count, 1)),
+            'phase0_mode_logprob_mean': float(phase0_mode_logprob_sum / max(phase0_contrib_count, 1)),
+            'phase0_packet_logprob_mean': float(phase0_packet_logprob_sum / max(phase0_contrib_count, 1)),
+            'phase0_owner_logprob_mean': float(phase0_owner_logprob_sum / max(phase0_contrib_count, 1)),
+            'phase0_embb_power_logprob_mean': float(phase0_embb_power_logprob_sum / max(phase0_contrib_count, 1)),
+            'phase0_mode_entropy_mean': float(phase0_mode_entropy_sum / max(phase0_contrib_count, 1)),
+            'phase0_packet_entropy_mean': float(phase0_packet_entropy_sum / max(phase0_contrib_count, 1)),
+            'phase0_owner_entropy_mean': float(phase0_owner_entropy_sum / max(phase0_contrib_count, 1)),
+            'phase0_embb_power_entropy_mean': float(phase0_embb_power_entropy_sum / max(phase0_contrib_count, 1)),
+            'phaseA_mode_logprob_mean': float(phaseA_mode_logprob_sum / max(phaseA_contrib_count, 1)),
+            'phaseA_packet_logprob_mean': float(phaseA_packet_logprob_sum / max(phaseA_contrib_count, 1)),
+            'phaseA_owner_logprob_mean': float(phaseA_owner_logprob_sum / max(phaseA_contrib_count, 1)),
+            'phaseA_embb_power_logprob_mean': float(phaseA_embb_power_logprob_sum / max(phaseA_contrib_count, 1)),
+            'phaseA_mode_entropy_mean': float(phaseA_mode_entropy_sum / max(phaseA_contrib_count, 1)),
+            'phaseA_packet_entropy_mean': float(phaseA_packet_entropy_sum / max(phaseA_contrib_count, 1)),
+            'phaseA_owner_entropy_mean': float(phaseA_owner_entropy_sum / max(phaseA_contrib_count, 1)),
+            'phaseA_embb_power_entropy_mean': float(phaseA_embb_power_entropy_sum / max(phaseA_contrib_count, 1)),
             'sampled_embb_owner_option_mean': float(sampled_owner_option_sum / max(sampled_owner_option_total, 1)),
             'sampled_embb_owner_option_nonzero_ratio': float(
                 sampled_owner_option_nonzero_count / max(sampled_owner_option_total, 1)
@@ -1899,6 +2043,12 @@ class SRMAPPOTrainer:
                 ),
                 'mean_phase0_owner_effective_change_count': float(
                     np.mean([item.get('phase0_owner_effective_change_count', 0.0) for item in episode_summaries])
+                ),
+                'mean_phase0_owner_effective_rate_gain_vs_snapshot_mean': float(
+                    np.mean([item.get('phase0_owner_effective_rate_gain_vs_snapshot_mean', 0.0) for item in episode_summaries])
+                ),
+                'mean_phase0_owner_effective_rate_gain_vs_snapshot_cells_mean_mbps': float(
+                    np.mean([item.get('phase0_owner_effective_rate_gain_vs_snapshot_cells_mean_mbps', 0.0) for item in episode_summaries])
                 ),
                 'mean_embb_user_rate': float(np.mean([item.get('embb_user_rate_mean', 0.0) for item in episode_summaries])),
                 'mean_embb_service_ratio': float(np.mean([item.get('embb_service_ratio', 0.0) for item in episode_summaries])),
@@ -2232,6 +2382,29 @@ class SRMAPPOTrainer:
         total_phase_a_embb_power_anchor_loss = 0.0
         update_steps = 0
         skipped_updates = 0
+        need_best_mode_aux = float(getattr(self.cfg.training, "aux_best_mode_coef", 0.0) or 0.0) > 1.0e-12
+        need_overlay_aux = float(getattr(self.cfg.training, "aux_overlay_feasible_coef", 0.0) or 0.0) > 1.0e-12
+        need_best_packet_aux = float(getattr(self.cfg.training, "aux_best_packet_coef", 0.0) or 0.0) > 1.0e-12
+        need_teacher_admission_distill = bool(
+            distill_coef > 1.0e-12
+            and float(getattr(self.cfg.training, "teacher_admission_loss_weight", 0.0) or 0.0) > 1.0e-12
+        )
+        need_teacher_mode_distill = bool(
+            distill_coef > 1.0e-12
+            and float(getattr(self.cfg.training, "teacher_mode_loss_weight", 0.0) or 0.0) > 1.0e-12
+        )
+        need_greedy_mode_bc = bool(
+            greedy_bc_coef > 1.0e-12
+            and float(getattr(self.cfg.training, "greedy_bc_mode_weight", 0.0) or 0.0) > 1.0e-12
+        )
+        need_greedy_packet_bc = bool(
+            greedy_bc_coef > 1.0e-12
+            and float(getattr(self.cfg.training, "greedy_bc_packet_weight", 0.0) or 0.0) > 1.0e-12
+        )
+        need_greedy_owner_bc = bool(
+            greedy_bc_coef > 1.0e-12
+            and float(getattr(self.cfg.training, "greedy_bc_owner_weight", 0.0) or 0.0) > 1.0e-12
+        )
 
         num_samples = batch.local_obs.shape[0]
         indices = np.arange(num_samples)
@@ -2264,17 +2437,27 @@ class SRMAPPOTrainer:
                 policy_loss = -torch.min(surrogate_1, surrogate_2).mean()
                 value_loss = torch.mean((outputs['value'] - batch.returns[mb_idx]) ** 2)
                 entropy = outputs['entropy'].mean()
-                best_mode_aux_loss = F.cross_entropy(outputs['best_mode_logits'], batch.aux_best_mode_target[mb_idx])
-                overlay_aux_loss = F.binary_cross_entropy_with_logits(
-                    outputs['overlay_feasible_logit'],
-                    batch.aux_overlay_feasible_target[mb_idx],
-                )
-                aux_packet_logits = self.model.compute_packet_logits(
-                    outputs['actor_latent'],
-                    batch.aux_best_mode_target[mb_idx],
-                    batch.packet_mask[mb_idx],
-                )
-                best_packet_aux_loss = F.cross_entropy(aux_packet_logits, batch.aux_best_packet_target[mb_idx])
+                if need_best_mode_aux:
+                    best_mode_aux_loss = F.cross_entropy(outputs['best_mode_logits'], batch.aux_best_mode_target[mb_idx])
+                else:
+                    best_mode_aux_loss = torch.zeros((), device=self.device)
+                if need_overlay_aux:
+                    overlay_aux_loss = F.binary_cross_entropy_with_logits(
+                        outputs['overlay_feasible_logit'],
+                        batch.aux_overlay_feasible_target[mb_idx],
+                    )
+                else:
+                    overlay_aux_loss = torch.zeros((), device=self.device)
+                aux_packet_logits = torch.zeros((1, 1), device=self.device)
+                if need_best_packet_aux:
+                    aux_packet_logits = self.model.compute_packet_logits(
+                        outputs['actor_latent'],
+                        batch.aux_best_mode_target[mb_idx],
+                        batch.packet_mask[mb_idx],
+                    )
+                    best_packet_aux_loss = F.cross_entropy(aux_packet_logits, batch.aux_best_packet_target[mb_idx])
+                else:
+                    best_packet_aux_loss = torch.zeros((), device=self.device)
                 mode_logits = outputs['mode_logits']
                 admit_logits = torch.stack(
                     [
@@ -2283,66 +2466,83 @@ class SRMAPPOTrainer:
                     ],
                     dim=-1,
                 )
-                admission_distill_loss_raw = F.cross_entropy(
-                    admit_logits,
-                    batch.teacher_admission_target[mb_idx],
-                    reduction='none',
-                )
-                admission_weights = batch.teacher_admission_weight[mb_idx]
-                if torch.sum(admission_weights) > 1.0e-9:
-                    admission_distill_loss = torch.sum(admission_distill_loss_raw * admission_weights) / torch.sum(admission_weights)
+                if need_teacher_admission_distill:
+                    admission_distill_loss_raw = F.cross_entropy(
+                        admit_logits,
+                        batch.teacher_admission_target[mb_idx],
+                        reduction='none',
+                    )
+                    admission_weights = batch.teacher_admission_weight[mb_idx]
+                    if torch.sum(admission_weights) > 1.0e-9:
+                        admission_distill_loss = torch.sum(admission_distill_loss_raw * admission_weights) / torch.sum(admission_weights)
+                    else:
+                        admission_distill_loss = torch.zeros((), device=self.device)
                 else:
                     admission_distill_loss = torch.zeros((), device=self.device)
 
                 mode_distill_logits = mode_logits[:, [MODE_OVERLAY, MODE_PUNCTURE]]
-                mode_distill_loss_raw = F.cross_entropy(
-                    mode_distill_logits,
-                    batch.teacher_mode_target[mb_idx],
-                    reduction='none',
-                )
-                mode_weights = batch.teacher_mode_weight[mb_idx]
-                if torch.sum(mode_weights) > 1.0e-9:
-                    mode_distill_loss = torch.sum(mode_distill_loss_raw * mode_weights) / torch.sum(mode_weights)
+                if need_teacher_mode_distill:
+                    mode_distill_loss_raw = F.cross_entropy(
+                        mode_distill_logits,
+                        batch.teacher_mode_target[mb_idx],
+                        reduction='none',
+                    )
+                    mode_weights = batch.teacher_mode_weight[mb_idx]
+                    if torch.sum(mode_weights) > 1.0e-9:
+                        mode_distill_loss = torch.sum(mode_distill_loss_raw * mode_weights) / torch.sum(mode_weights)
+                    else:
+                        mode_distill_loss = torch.zeros((), device=self.device)
                 else:
                     mode_distill_loss = torch.zeros((), device=self.device)
 
-                greedy_packet_logits = self.model.compute_packet_logits(
-                    outputs['actor_latent'],
-                    batch.greedy_bc_mode_target[mb_idx],
-                    batch.packet_mask[mb_idx],
-                )
-                greedy_owner_logits = self.model.compute_embb_owner_logits(
-                    outputs['actor_latent'],
-                    batch.embb_owner_mask[mb_idx],
-                )
-                greedy_mode_bc_raw = F.cross_entropy(
-                    mode_logits,
-                    batch.greedy_bc_mode_target[mb_idx],
-                    reduction='none',
-                )
-                greedy_packet_bc_raw = F.cross_entropy(
-                    greedy_packet_logits,
-                    batch.greedy_bc_packet_target[mb_idx],
-                    reduction='none',
-                )
-                greedy_owner_bc_raw = F.cross_entropy(
-                    greedy_owner_logits,
-                    batch.greedy_bc_owner_target[mb_idx],
-                    reduction='none',
-                )
-                greedy_mode_weights = batch.greedy_bc_mode_weight[mb_idx]
-                greedy_packet_weights = batch.greedy_bc_packet_weight[mb_idx]
-                greedy_owner_weights = batch.greedy_bc_owner_weight[mb_idx]
-                if torch.sum(greedy_mode_weights) > 1.0e-9:
-                    greedy_mode_bc_loss = torch.sum(greedy_mode_bc_raw * greedy_mode_weights) / torch.sum(greedy_mode_weights)
+                greedy_packet_logits = torch.zeros((1, 1), device=self.device)
+                greedy_owner_logits = torch.zeros((1, 1), device=self.device)
+                if need_greedy_mode_bc:
+                    greedy_mode_bc_raw = F.cross_entropy(
+                        mode_logits,
+                        batch.greedy_bc_mode_target[mb_idx],
+                        reduction='none',
+                    )
+                    greedy_mode_weights = batch.greedy_bc_mode_weight[mb_idx]
+                    if torch.sum(greedy_mode_weights) > 1.0e-9:
+                        greedy_mode_bc_loss = torch.sum(greedy_mode_bc_raw * greedy_mode_weights) / torch.sum(greedy_mode_weights)
+                    else:
+                        greedy_mode_bc_loss = torch.zeros((), device=self.device)
                 else:
                     greedy_mode_bc_loss = torch.zeros((), device=self.device)
-                if torch.sum(greedy_packet_weights) > 1.0e-9:
-                    greedy_packet_bc_loss = torch.sum(greedy_packet_bc_raw * greedy_packet_weights) / torch.sum(greedy_packet_weights)
+                if need_greedy_packet_bc:
+                    greedy_packet_logits = self.model.compute_packet_logits(
+                        outputs['actor_latent'],
+                        batch.greedy_bc_mode_target[mb_idx],
+                        batch.packet_mask[mb_idx],
+                    )
+                    greedy_packet_bc_raw = F.cross_entropy(
+                        greedy_packet_logits,
+                        batch.greedy_bc_packet_target[mb_idx],
+                        reduction='none',
+                    )
+                    greedy_packet_weights = batch.greedy_bc_packet_weight[mb_idx]
+                    if torch.sum(greedy_packet_weights) > 1.0e-9:
+                        greedy_packet_bc_loss = torch.sum(greedy_packet_bc_raw * greedy_packet_weights) / torch.sum(greedy_packet_weights)
+                    else:
+                        greedy_packet_bc_loss = torch.zeros((), device=self.device)
                 else:
                     greedy_packet_bc_loss = torch.zeros((), device=self.device)
-                if torch.sum(greedy_owner_weights) > 1.0e-9:
-                    greedy_owner_bc_loss = torch.sum(greedy_owner_bc_raw * greedy_owner_weights) / torch.sum(greedy_owner_weights)
+                if need_greedy_owner_bc:
+                    greedy_owner_logits = self.model.compute_embb_owner_logits(
+                        outputs['actor_latent'],
+                        batch.embb_owner_mask[mb_idx],
+                    )
+                    greedy_owner_bc_raw = F.cross_entropy(
+                        greedy_owner_logits,
+                        batch.greedy_bc_owner_target[mb_idx],
+                        reduction='none',
+                    )
+                    greedy_owner_weights = batch.greedy_bc_owner_weight[mb_idx]
+                    if torch.sum(greedy_owner_weights) > 1.0e-9:
+                        greedy_owner_bc_loss = torch.sum(greedy_owner_bc_raw * greedy_owner_weights) / torch.sum(greedy_owner_weights)
+                    else:
+                        greedy_owner_bc_loss = torch.zeros((), device=self.device)
                 else:
                     greedy_owner_bc_loss = torch.zeros((), device=self.device)
 
@@ -2507,7 +2707,7 @@ class SRMAPPOTrainer:
         torch.save(payload, path)
 
     def load_checkpoint(self, path: Path) -> Dict:
-        payload = torch.load(path, map_location=self.device)
+        payload = torch_load_checkpoint(path, map_location=self.device)
         self.model.load_state_dict(payload['model_state_dict'])
         optimizer_state = payload.get('optimizer_state_dict')
         if optimizer_state is not None:
@@ -2569,7 +2769,7 @@ def run_training_loop(cfg, evaluation_fn=None, resume_path: Optional[Path] = Non
     history = []
     checkpoint_dir = Path(cfg.training.checkpoint_dir)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    progress_every = 20
+    progress_every = max(int(getattr(cfg.training, "progress_every", 20) or 20), 1)
     selection_mode = str(getattr(cfg.training, "selection_mode", "dual_metric") or "dual_metric").strip().lower()
     selection_admission_floor = float(getattr(cfg.training, "selection_admission_floor", 0.0) or 0.0)
     load_aware_objective = bool(getattr(cfg.training, "load_aware_objective", False))
@@ -2826,6 +3026,9 @@ def run_training_loop(cfg, evaluation_fn=None, resume_path: Optional[Path] = Non
                     getattr(base_cfg.training, "checkpoint_eval_scope", "representative_load") or "representative_load"
                 ).strip().lower()
                 eval_kind = "light_eval_representative"
+                checkpoint_eval_episodes_per_load = int(
+                    getattr(base_cfg.training, "checkpoint_eval_episodes_per_load", 1) or 1
+                )
                 if checkpoint_eval_scope == "all_loads":
                     checkpoint_eval_loads = [
                         float(load)
@@ -2835,13 +3038,22 @@ def run_training_loop(cfg, evaluation_fn=None, resume_path: Optional[Path] = Non
                             or []
                         )
                     ]
-                    checkpoint_eval_episodes_per_load = int(
-                        getattr(base_cfg.training, "checkpoint_eval_episodes_per_load", 1) or 1
-                    )
                     if checkpoint_eval_loads:
                         eval_cfg.training.eval_loads = checkpoint_eval_loads
                     eval_cfg.training.eval_episodes_per_load = checkpoint_eval_episodes_per_load
                     eval_kind = "light_eval_all_loads"
+                else:
+                    representative_loads = [
+                        float(load)
+                        for load in (
+                            getattr(base_cfg.training, "checkpoint_eval_loads", [])
+                            or getattr(base_cfg.training, "eval_loads", [])
+                            or []
+                        )
+                    ]
+                    if representative_loads:
+                        eval_cfg.training.eval_loads = [float(representative_loads[-1])]
+                    eval_cfg.training.eval_episodes_per_load = checkpoint_eval_episodes_per_load
         compare_modes = (
             ["selected", "original", "matched", "throughput_feasible", "throughput_only", "channel_only"]
             if force_full_compare
@@ -3854,6 +4066,8 @@ def run_training_loop(cfg, evaluation_fn=None, resume_path: Optional[Path] = Non
                 f"{float(rollout_stats.get('rollout_sampled_owner_option_snapshot_ratio', 0.0)):.3f}/"
                 f"{float(rollout_stats.get('rollout_sampled_owner_option_non_snapshot_ratio', 0.0)):.3f}"
                 f" | owner_effective_change={float(rollout_stats.get('mean_phase0_owner_changed_and_effective_ratio', 0.0)):.3f}"
+                f" | owner_rate_gain={float(rollout_stats.get('mean_phase0_owner_effective_rate_gain_vs_snapshot_mean', 0.0)):.3f}"
+                f" | owner_rate_gain_per_change={float(rollout_stats.get('mean_phase0_owner_effective_rate_gain_vs_snapshot_cells_mean_mbps', 0.0)):.3f} Mbps"
                 f" | embb_service_ratio={float(rollout_stats.get('mean_embb_service_ratio', 0.0)):.3f}"
                 f" | embb_positive_rate_ratio={float(rollout_stats.get('mean_embb_positive_rate_ratio', 0.0)):.3f}"
                 f" | phaseA_embb_pwr(raw/exe)={float(rollout_stats.get('phase_a_raw_embb_power_nonzero_ratio', 0.0)):.3f}/{float(rollout_stats.get('phase_a_executed_embb_power_nonzero_ratio', 0.0)):.3f}"
@@ -4022,6 +4236,7 @@ def run_training_loop(cfg, evaluation_fn=None, resume_path: Optional[Path] = Non
                         f" | eval_adm_over_srv_pen={float(latest_eval.get('policy_mean_urllc_admission_over_service_tradeoff_penalty', 0.0)):.3f}"
                         f" | eval_owner_srv_gain={float(latest_eval.get('policy_mean_phase0_owner_effective_service_gain_ratio', 0.0)):.3f}"
                         f" | eval_owner_rate_gain={float(latest_eval.get('policy_mean_phase0_owner_effective_rate_gain_vs_snapshot_mean', 0.0)):.3f}"
+                        f" | eval_owner_rate_gain_per_change={float(latest_eval.get('policy_mean_phase0_owner_effective_rate_gain_vs_snapshot_cells_mean_mbps', 0.0)):.3f} Mbps"
                         f" | eval_phaseA_sat={float(latest_eval.get('policy_mean_phase_a_embb_power_raw_saturation_ratio', 0.0)):.3f}"
                         f" | eval_phaseA_final_std={float(latest_eval.get('policy_mean_phase_a_embb_power_final_std', 0.0)):.4f}"
                         f" | eval_ph0_pwr_chg={float(latest_eval.get('policy_mean_planning_embb_power_changed_ratio', 0.0)):.3f}"

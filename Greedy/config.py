@@ -24,32 +24,35 @@ class SystemConfig:
         self.num_subcarriers = 12                  # Total RBs (K) per UAV (reduced)
 
         # Spatial topology for visualization / association
-        self.area_width = 400.0                    # meters
-        self.area_height = 400.0                   # meters
+        self.area_width = 500.0                    # meters
+        self.area_height = 500.0                   # meters
         self.uav_positions = np.array([
-            [135.0, 75.0],
-            [330.0, 235.0],
-            [165.0, 320.0]
+            [90.0, 90.0],
+            [410.0, 120.0],
+            [250.0, 410.0]
         ], dtype=float)
         self.uav_altitudes = np.array([120.0, 120.0, 120.0], dtype=float)
+        self.uav_min_separation = 300.0           # meters
         self.user_cluster_spread = 35.0           # meters
+        self.user_intra_cluster_max_dist = 70.0   # meters
+        self.user_inter_cluster_min_dist = 100.0  # meters
         self.user_min_boundary_margin = 20.0      # meters
         self.random_seed = 42                     # Deterministic topology / shadowing seed
         
         # Time structure
         self.num_slots = 10                        # Simulation slots
-        self.num_minislots = 8                     # Mini-slots per slot (S)
+        self.num_minislots = 7                     # Mini-slots per slot (S), 2 OFDM symbols each
         self.slot_duration = 0.25                  # ms per slot
         self.minislot_duration = self.slot_duration / self.num_minislots  # ms
         
         # Channel parameters
         self.carrier_frequency = 2.0e9             # Hz (2.0 GHz band)
-        self.bandwidth = 5.76e6                    # Hz (5.76 MHz)
+        self.bandwidth = 8.64e6                    # Hz (8.64 MHz), 12 RB x 720 kHz under mu=2
         self.tx_antenna = 2                        # Tx antennas
         self.rx_antenna = 2                        # Rx antennas
         self.noise_figure = 5.0                    # dB
-        self.subcarrier_spacing = 15e3            # Hz (assumed OFDM spacing)
-        self.ofdm_symbols_per_slot = 14           # OFDM symbols in a 1 ms slot (15 kHz baseline)
+        self.subcarrier_spacing = 60e3            # Hz, NR numerology mu=2
+        self.ofdm_symbols_per_slot = 14           # OFDM symbols per 0.25 ms NR slot
         
         # Path loss model
         self.los_probability = 0.9                 # LoS probability in UAV scenario
@@ -71,10 +74,9 @@ class SystemConfig:
         self.minislot_duration = self.slot_duration / self.num_minislots  # ms
         self.subcarrier_bw = self.bandwidth / self.num_subcarriers        # Hz per RB
         self.noise_power = self._calculate_noise_power()
-        minislot_duration_s = self.minislot_duration * 1e-3
         symbols_per_slot = max(
             1,
-            int(round(self.ofdm_symbols_per_slot * (self.slot_duration / 1.0))),
+            int(round(self.ofdm_symbols_per_slot)),
         )
         symbols_per_minislot = max(
             1,
@@ -101,11 +103,11 @@ class URLLCConfig:
     def __init__(self):
         # Reliability requirements
         self.target_error_probability = 1e-4      # Error probability threshold (epsilon_z)
-        self.packet_lengths = [120, 150, 180]     # bits (L_z) - 3 URLLC types
+        self.packet_lengths = [48, 72, 96]        # bits (L_z) - 3 URLLC payload sizes
         
         # Latency constraints
         self.max_latency_slots = 1                 # Maximum allowed slots
-        self.max_latency_minislots = 8             # Maximum allowed mini-slots
+        self.max_latency_minislots = 7             # Maximum allowed mini-slots
         
         # Finite blocklength parameters
         self.finite_blocklength_factor = 20        # Q-function approximation factor
@@ -201,6 +203,8 @@ class SimulationConfig:
         self.urllc_arrival_prob = 0.1
         self.urllc_poisson_rate = 1.0             # Average URLLC arrivals per slot
         self.fixed_urllc_poisson_rate = False     # If True, do not scale lambda with load
+        self.urllc_arrival_mode = "full_buffer"   # "full_buffer", "bernoulli", or "poisson"
+        self.urllc_bernoulli_tx_prob = 0.5        # Fixed per-user per-minislot TX probability in bernoulli mode
         # URLLC user ratio (when scaling total users). 0.0 means follow original eMBB/URLLC counts.
         self.urllc_user_ratio = 0.0
         

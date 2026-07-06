@@ -61,6 +61,7 @@ class CandidatePacket:
     # Decomposition of `cause_other_structural_reason` for report-side root-cause analysis.
     cause_gain_ratio_unqualified: bool = False
     cause_overlay_margin_blocked: bool = False
+    cause_overlay_retention_gate_blocked: bool = False
     cause_overlay_positive_gate_blocked: bool = False
     cause_no_overlay_owner_available: bool = False
     cause_overlay_reliability_failed: bool = False

@@ -16,7 +16,8 @@ for s in scenarios:
     sys_cfg.num_subcarriers = s['num_rbs']
     # keep small slot/minislot
     sys_cfg.num_slots = 1
-    sys_cfg.num_minislots = 8
+    sys_cfg.num_minislots = 7
+    sys_cfg.refresh_derived_params()
 
     urllc_cfg = URLLCConfig()
     embb_cfg = eMBBConfig()

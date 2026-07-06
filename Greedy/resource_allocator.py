@@ -926,7 +926,7 @@ class ResourceAllocator:
 
     def _compute_embb_state(self, embb_rb_alloc, channel_gains_mag_sq, best_uav_per_user,
                             embb_tx_powers, urllc_timefreq_grid=None, noma_decisions=None,
-                            urllc_power_alloc=None):
+                            urllc_power_alloc=None, power_scale_per_uav_rb=None):
         """Compute eMBB rates and effective power for a given allocation state."""
         # Evaluates base rates, then applies survival fractions under URLLC coexistence.
         num_embb = self.sys_cfg.num_embb_users
@@ -940,6 +940,11 @@ class ResourceAllocator:
         base_rb_rates = np.zeros(num_subcarriers)
         base_rb_rates_per_uav_rb = np.zeros((num_uavs, num_subcarriers))
 
+        power_scale_matrix = (
+            np.asarray(power_scale_per_uav_rb, dtype=float)
+            if power_scale_per_uav_rb is not None else None
+        )
+
         for embb_idx in range(num_embb):
             assigned_rbs = np.where(embb_rb_alloc[embb_idx, :] == 1)[0]
             if assigned_rbs.size == 0:
@@ -947,10 +952,19 @@ class ResourceAllocator:
             best_uav = best_uav_per_user[embb_idx]
             user_idx = self.sys_cfg.num_urllc_users + embb_idx
             tx_power = embb_tx_powers[embb_idx]
-            per_rb_power = tx_power / max(assigned_rbs.size, 1)
 
             total_survival = 0.0
+            effective_power_sum = 0.0
             for rb in assigned_rbs:
+                per_rb_scale = 1.0
+                if (
+                    power_scale_matrix is not None
+                    and power_scale_matrix.ndim == 2
+                    and 0 <= int(best_uav) < power_scale_matrix.shape[0]
+                    and 0 <= int(rb) < power_scale_matrix.shape[1]
+                ):
+                    per_rb_scale = float(power_scale_matrix[int(best_uav), int(rb)])
+                per_rb_power = (tx_power / max(assigned_rbs.size, 1)) * per_rb_scale
                 owner_per_rb[rb] = embb_idx
                 ch_sq = channel_gains_mag_sq[user_idx, best_uav, rb]
                 base_interference = self._compute_intercell_interference(
@@ -1041,9 +1055,10 @@ class ResourceAllocator:
 
                 embb_rates[embb_idx] += base_rate * surviving_fraction
                 total_survival += surviving_fraction
+                effective_power_sum += per_rb_power * surviving_fraction
 
             avg_survival = total_survival / assigned_rbs.size
-            embb_power_alloc[embb_idx, best_uav] = tx_power * avg_survival
+            embb_power_alloc[embb_idx, best_uav] = effective_power_sum
 
         return {
             'power_allocation': embb_power_alloc,

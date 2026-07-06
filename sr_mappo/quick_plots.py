@@ -22,7 +22,7 @@ import numpy as np
 import torch
 
 from .compare import _build_main_like_configs, _configure_density_scenario
-from .config import SRMAPPOConfig, cfg_from_dict
+from .config import SRMAPPOConfig, cfg_from_dict, torch_load_checkpoint
 from .env import SRMAPPOPhaseAEnv
 from .networks import SRMAPPOActorCritic
 from .report import run_env_episode
@@ -166,7 +166,7 @@ def run_lambda_sweep(
     episodes_per_lambda: int,
 ) -> Dict[str, object]:
     base_sys, base_urllc, base_embb, base_algo, base_sim = _build_main_like_configs()
-    payload = torch.load(checkpoint_path, map_location="cpu")
+    payload = torch_load_checkpoint(checkpoint_path, map_location="cpu")
     checkpoint_cfg = cfg_from_dict(payload.get("cfg"))
     extra = payload.get("extra", {}) if isinstance(payload, dict) else {}
     runtime_enabled = bool(

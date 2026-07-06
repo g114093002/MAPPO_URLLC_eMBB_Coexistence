@@ -708,7 +708,7 @@ class SimulationPlotter:
         plt.close()
 
     def plot_slot_timefreq_heatmap(self, embb_rbs, urllc_timefreq_grid, num_urllc, num_embb,
-                                   num_minislots=8, slot_index=0, save_path=None,
+                                   num_minislots=7, slot_index=0, save_path=None,
                                    embb_owner_per_rb=None, noma_decisions=None,
                                    embb_owner_per_uav_rb=None, coexistence_mode_per_uav=None,
                                    coexistence_urllc_user_per_uav=None, plot_uav_index=0,

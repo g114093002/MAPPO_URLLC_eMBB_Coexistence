@@ -42,6 +42,16 @@ class PolicyStepOutput:
     best_mode_logits: torch.Tensor
     overlay_feasible_logit: torch.Tensor
     embb_owner_logits: Optional[torch.Tensor] = None
+    planning_phase_active: Optional[torch.Tensor] = None
+    phase_a_active: Optional[torch.Tensor] = None
+    mode_log_prob_term: Optional[torch.Tensor] = None
+    packet_log_prob_term: Optional[torch.Tensor] = None
+    embb_owner_log_prob_term: Optional[torch.Tensor] = None
+    embb_power_log_prob_term: Optional[torch.Tensor] = None
+    mode_entropy_term: Optional[torch.Tensor] = None
+    packet_entropy_term: Optional[torch.Tensor] = None
+    embb_owner_entropy_term: Optional[torch.Tensor] = None
+    embb_power_entropy_term: Optional[torch.Tensor] = None
 
 
 class RecurrentEncoder(nn.Module):
@@ -270,6 +280,31 @@ class SRMAPPOActorCritic(nn.Module):
             getattr(self, "phase_a_embb_power_enabled", getattr(self.cfg.env, "allow_phase_a_embb_power_adjustment", False))
         )
 
+    def _phase0_embb_power_uses_user_budget_weight(self) -> bool:
+        mode = str(getattr(self.cfg.env, "phase0_embb_power_parameterization", "delta_scale") or "delta_scale").strip().lower()
+        return bool(mode == "user_budget_weight")
+
+    def _phase0_embb_power_action_transform(self, pre_tanh: torch.Tensor) -> torch.Tensor:
+        if self._phase0_embb_power_uses_user_budget_weight():
+            return torch.sigmoid(pre_tanh)
+        return torch.tanh(pre_tanh)
+
+    def _apply_embb_power_output_transform(
+        self,
+        pre_tanh: torch.Tensor,
+        planning_active: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        if not self._phase0_embb_power_uses_user_budget_weight():
+            return torch.tanh(pre_tanh)
+        planning_mask = (
+            planning_active.to(dtype=torch.bool)
+            if planning_active is not None
+            else torch.ones(pre_tanh.shape[0], dtype=torch.bool, device=pre_tanh.device)
+        )
+        planning_out = torch.sigmoid(pre_tanh)
+        phase_a_out = torch.tanh(pre_tanh)
+        return torch.where(planning_mask.unsqueeze(-1), planning_out, phase_a_out)
+
     def _embb_activity_masks(
         self,
         embb_owner_mask: Optional[torch.Tensor],
@@ -298,6 +333,41 @@ class SRMAPPOActorCritic(nn.Module):
             power_active = planning_power_active | phase_a_power_active
         return owner_active, power_active
 
+    def _phase_activity_masks(
+        self,
+        mode_mask: Optional[torch.Tensor],
+        packet_mask: Optional[torch.Tensor],
+        embb_owner_mask: Optional[torch.Tensor],
+        embb_owner_active: Optional[torch.Tensor],
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        planning_phase = None
+        if embb_owner_active is not None:
+            planning_phase = embb_owner_active.to(dtype=torch.bool)
+        if planning_phase is None and mode_mask is not None:
+            mode_mask_bool = mode_mask > 0 if mode_mask.dtype != torch.bool else mode_mask
+            keep_only = torch.sum(mode_mask_bool, dim=-1) == 1
+            keep_enabled = mode_mask_bool[:, MODE_KEEP]
+            planning_phase = keep_only & keep_enabled
+        if planning_phase is None and packet_mask is not None:
+            packet_mask_bool = packet_mask > 0 if packet_mask.dtype != torch.bool else packet_mask
+            keep_row = packet_mask_bool[:, MODE_KEEP, :]
+            keep_null_only = torch.sum(keep_row, dim=-1) == 1
+            keep_null_enabled = keep_row[:, 0]
+            non_keep_any = torch.any(packet_mask_bool[:, 1:, 1:], dim=(-2, -1))
+            inferred = keep_null_only & keep_null_enabled & (~non_keep_any)
+            planning_phase = inferred if planning_phase is None else (planning_phase | inferred)
+        if planning_phase is None:
+            if embb_owner_mask is not None:
+                planning_phase = torch.zeros(embb_owner_mask.shape[0], dtype=torch.bool, device=embb_owner_mask.device)
+            elif mode_mask is not None:
+                planning_phase = torch.zeros(mode_mask.shape[0], dtype=torch.bool, device=mode_mask.device)
+            elif packet_mask is not None:
+                planning_phase = torch.zeros(packet_mask.shape[0], dtype=torch.bool, device=packet_mask.device)
+            else:
+                raise RuntimeError("Cannot infer phase activity without masks.")
+        phase_a_active = ~planning_phase
+        return planning_phase, phase_a_active
+
     def _combine_head_terms(
         self,
         *,
@@ -305,13 +375,22 @@ class SRMAPPOActorCritic(nn.Module):
         packet_term: torch.Tensor,
         embb_owner_term: torch.Tensor,
         embb_power_term: torch.Tensor,
+        mode_active: torch.Tensor,
+        packet_active: torch.Tensor,
         embb_owner_active: Optional[torch.Tensor],
         embb_power_active: Optional[torch.Tensor],
     ) -> torch.Tensor:
+        zero = torch.zeros_like(mode_term)
+        mode_term = torch.where(mode_active, mode_term, zero)
+        packet_term = torch.where(packet_active, packet_term, zero)
+        if embb_owner_active is not None:
+            embb_owner_term = torch.where(embb_owner_active, embb_owner_term, zero)
+        if embb_power_active is not None:
+            embb_power_term = torch.where(embb_power_active, embb_power_term, zero)
         total = mode_term + packet_term + embb_owner_term + embb_power_term
         if not bool(getattr(self.cfg.network, "normalize_joint_log_prob_by_active_heads", False)):
             return total
-        active_heads = torch.full_like(mode_term, 2.0)
+        active_heads = mode_active.to(dtype=mode_term.dtype) + packet_active.to(dtype=mode_term.dtype)
         if embb_owner_active is None:
             if self.cfg.env.learn_embb_baseline:
                 active_heads = active_heads + 1.0
@@ -395,7 +474,10 @@ class SRMAPPOActorCritic(nn.Module):
             embb_std = torch.exp(embb_log_std).expand_as(embb_mean)
             embb_power_dist = Normal(embb_mean, embb_std)
             sampled_embb_power_pre_tanh = embb_mean if deterministic else embb_power_dist.rsample()
-            sampled_embb_power_delta = torch.tanh(sampled_embb_power_pre_tanh)
+            sampled_embb_power_delta = self._apply_embb_power_output_transform(
+                sampled_embb_power_pre_tanh,
+                embb_owner_active,
+            )
             if self.cfg.env.learn_embb_baseline:
                 sampled_embb_owner_log_prob = embb_owner_dist.log_prob(embb_owner)
                 sampled_embb_owner_entropy = embb_owner_dist.entropy()
@@ -460,22 +542,35 @@ class SRMAPPOActorCritic(nn.Module):
             embb_owner_entropy = torch.zeros_like(mode, dtype=power_pre_tanh.dtype)
             embb_power_entropy = torch.zeros_like(mode, dtype=power_pre_tanh.dtype)
 
-        log_prob = self._combine_head_terms(
-            mode_term=mode_dist.log_prob(mode),
-            packet_term=packet_dist.log_prob(packet),
-            embb_owner_term=embb_owner_log_prob,
-            embb_power_term=embb_log_prob - embb_owner_log_prob,
-            embb_owner_active=embb_owner_active,
-            embb_power_active=embb_power_active,
+        planning_phase_active, phase_a_active = self._phase_activity_masks(
+            mode_mask,
+            packet_mask,
+            embb_owner_mask,
+            embb_owner_active if self.cfg.env.learn_embb_baseline else None,
         )
+        mode_log_prob_term = mode_dist.log_prob(mode)
+        packet_log_prob_term = packet_dist.log_prob(packet)
+        embb_power_log_prob_term = embb_log_prob - embb_owner_log_prob
         mode_entropy = mode_dist.entropy()
         packet_entropy = packet_dist.entropy()
+        log_prob = self._combine_head_terms(
+            mode_term=mode_log_prob_term,
+            packet_term=packet_log_prob_term,
+            embb_owner_term=embb_owner_log_prob,
+            embb_power_term=embb_power_log_prob_term,
+            mode_active=phase_a_active,
+            packet_active=phase_a_active,
+            embb_owner_active=planning_phase_active if self.cfg.env.learn_embb_baseline else None,
+            embb_power_active=embb_power_active,
+        )
         entropy = self._combine_head_terms(
             mode_term=mode_entropy,
             packet_term=packet_entropy,
             embb_owner_term=embb_owner_entropy,
             embb_power_term=embb_power_entropy,
-            embb_owner_active=embb_owner_active,
+            mode_active=phase_a_active,
+            packet_active=phase_a_active,
+            embb_owner_active=planning_phase_active if self.cfg.env.learn_embb_baseline else None,
             embb_power_active=embb_power_active,
         )
         value = self.value_head(critic_latent).squeeze(-1)
@@ -500,6 +595,32 @@ class SRMAPPOActorCritic(nn.Module):
             best_mode_logits=best_mode_logits,
             overlay_feasible_logit=overlay_feasible_logit,
             embb_owner_logits=embb_owner_logits,
+            planning_phase_active=planning_phase_active,
+            phase_a_active=phase_a_active,
+            mode_log_prob_term=torch.where(phase_a_active, mode_log_prob_term, torch.zeros_like(mode_log_prob_term)),
+            packet_log_prob_term=torch.where(phase_a_active, packet_log_prob_term, torch.zeros_like(packet_log_prob_term)),
+            embb_owner_log_prob_term=torch.where(
+                planning_phase_active,
+                embb_owner_log_prob,
+                torch.zeros_like(embb_owner_log_prob),
+            ),
+            embb_power_log_prob_term=torch.where(
+                embb_power_active if embb_power_active is not None else torch.ones_like(phase_a_active),
+                embb_power_log_prob_term,
+                torch.zeros_like(embb_power_log_prob_term),
+            ),
+            mode_entropy_term=torch.where(phase_a_active, mode_entropy, torch.zeros_like(mode_entropy)),
+            packet_entropy_term=torch.where(phase_a_active, packet_entropy, torch.zeros_like(packet_entropy)),
+            embb_owner_entropy_term=torch.where(
+                planning_phase_active,
+                embb_owner_entropy,
+                torch.zeros_like(embb_owner_entropy),
+            ),
+            embb_power_entropy_term=torch.where(
+                embb_power_active if embb_power_active is not None else torch.ones_like(phase_a_active),
+                embb_power_entropy,
+                torch.zeros_like(embb_power_entropy),
+            ),
         )
 
     def evaluate_actions(
@@ -551,6 +672,7 @@ class SRMAPPOActorCritic(nn.Module):
                     zero_like_owner_scalar,
                 )
         else:
+            embb_owner_active = None
             embb_owner_log_prob = torch.zeros_like(mode_actions, dtype=actor_latent.dtype)
             embb_owner_entropy = torch.zeros_like(mode_actions, dtype=actor_latent.dtype)
             embb_power_active = torch.ones_like(mode_actions, dtype=torch.bool) if embb_power_head_enabled else None
@@ -589,24 +711,58 @@ class SRMAPPOActorCritic(nn.Module):
             embb_log_prob = torch.zeros_like(mode_actions, dtype=actor_latent.dtype)
             embb_entropy = torch.zeros_like(mode_actions, dtype=actor_latent.dtype)
 
+        planning_phase_active, phase_a_active = self._phase_activity_masks(
+            mode_mask,
+            packet_mask,
+            embb_owner_mask,
+            embb_owner_active if self.cfg.env.learn_embb_baseline else None,
+        )
+        mode_log_prob_term = mode_dist.log_prob(mode_actions)
+        packet_log_prob_term = packet_dist.log_prob(packet_actions)
+        embb_power_log_prob_term = embb_log_prob - embb_owner_log_prob
+        mode_entropy_term = mode_dist.entropy()
+        packet_entropy_term = packet_dist.entropy()
         log_prob = self._combine_head_terms(
-            mode_term=mode_dist.log_prob(mode_actions),
-            packet_term=packet_dist.log_prob(packet_actions),
+            mode_term=mode_log_prob_term,
+            packet_term=packet_log_prob_term,
             embb_owner_term=embb_owner_log_prob,
-            embb_power_term=embb_log_prob - embb_owner_log_prob,
-            embb_owner_active=embb_owner_active if self.cfg.env.learn_embb_baseline else None,
+            embb_power_term=embb_power_log_prob_term,
+            mode_active=phase_a_active,
+            packet_active=phase_a_active,
+            embb_owner_active=planning_phase_active if self.cfg.env.learn_embb_baseline else None,
             embb_power_active=embb_power_active,
         )
         entropy = self._combine_head_terms(
-            mode_term=mode_dist.entropy(),
-            packet_term=packet_dist.entropy(),
+            mode_term=mode_entropy_term,
+            packet_term=packet_entropy_term,
             embb_owner_term=embb_owner_entropy,
             embb_power_term=embb_entropy - embb_owner_entropy,
-            embb_owner_active=embb_owner_active if self.cfg.env.learn_embb_baseline else None,
+            mode_active=phase_a_active,
+            packet_active=phase_a_active,
+            embb_owner_active=planning_phase_active if self.cfg.env.learn_embb_baseline else None,
             embb_power_active=embb_power_active,
         )
         value = self.value_head(critic_latent).squeeze(-1)
         best_mode_logits, overlay_feasible_logit = self.compute_aux_predictions(actor_latent)
+
+        if torch.any(planning_phase_active):
+            alt_log_prob = self._combine_head_terms(
+                mode_term=torch.zeros_like(mode_log_prob_term),
+                packet_term=torch.zeros_like(packet_log_prob_term),
+                embb_owner_term=embb_owner_log_prob,
+                embb_power_term=embb_power_log_prob_term,
+                mode_active=torch.zeros_like(phase_a_active),
+                packet_active=torch.zeros_like(phase_a_active),
+                embb_owner_active=planning_phase_active if self.cfg.env.learn_embb_baseline else None,
+                embb_power_active=embb_power_active,
+            )
+            if not torch.allclose(
+                log_prob[planning_phase_active],
+                alt_log_prob[planning_phase_active],
+                atol=1.0e-6,
+                rtol=1.0e-6,
+            ):
+                raise AssertionError("Phase-0 aggregated log_prob depends on inactive mode/packet heads.")
 
         return {
             "log_prob": log_prob,
@@ -620,8 +776,34 @@ class SRMAPPOActorCritic(nn.Module):
             "overlay_feasible_logit": overlay_feasible_logit,
             "embb_power_mean": embb_mean if embb_power_head_enabled else torch.zeros_like(power_pre_tanh),
             "embb_power_delta_mean": (
-                torch.tanh(embb_mean).squeeze(-1)
+                self._apply_embb_power_output_transform(embb_mean, planning_phase_active).squeeze(-1)
                 if embb_power_head_enabled
                 else torch.zeros_like(mode_actions, dtype=actor_latent.dtype)
+            ),
+            "planning_phase_active": planning_phase_active,
+            "phase_a_active": phase_a_active,
+            "mode_log_prob_term": torch.where(phase_a_active, mode_log_prob_term, torch.zeros_like(mode_log_prob_term)),
+            "packet_log_prob_term": torch.where(phase_a_active, packet_log_prob_term, torch.zeros_like(packet_log_prob_term)),
+            "embb_owner_log_prob_term": torch.where(
+                planning_phase_active,
+                embb_owner_log_prob,
+                torch.zeros_like(embb_owner_log_prob),
+            ),
+            "embb_power_log_prob_term": torch.where(
+                embb_power_active if embb_power_active is not None else torch.ones_like(phase_a_active),
+                embb_power_log_prob_term,
+                torch.zeros_like(embb_power_log_prob_term),
+            ),
+            "mode_entropy_term": torch.where(phase_a_active, mode_entropy_term, torch.zeros_like(mode_entropy_term)),
+            "packet_entropy_term": torch.where(phase_a_active, packet_entropy_term, torch.zeros_like(packet_entropy_term)),
+            "embb_owner_entropy_term": torch.where(
+                planning_phase_active,
+                embb_owner_entropy,
+                torch.zeros_like(embb_owner_entropy),
+            ),
+            "embb_power_entropy_term": torch.where(
+                embb_power_active if embb_power_active is not None else torch.ones_like(phase_a_active),
+                embb_entropy - embb_owner_entropy,
+                torch.zeros_like(embb_entropy),
             ),
         }

@@ -66,11 +66,12 @@ def main():
     algo_cfg.power_upper_bound = 0.25
     sys_cfg.shadowing_std = 6.0
     sys_cfg.los_probability = 0.8
-    urllc_cfg.packet_lengths = [160, 180, 200]
+    urllc_cfg.packet_lengths = [48, 72, 96]
     urllc_cfg.target_error_probability = 1e-5
 
     print("\nRuntime Scenario:")
-    print(f"  URLLC Arrival Model: Poisson(lambda={sim_cfg.urllc_poisson_rate:.2f} per slot)")
+    print(f"  URLLC Arrival Model: {str(getattr(sim_cfg, 'urllc_arrival_mode', 'bernoulli')).strip().lower()} activation control")
+    print(f"  URLLC Activation Input: {sim_cfg.urllc_poisson_rate:.2f}")
     print(f"  URLLC Packet Lengths: {urllc_cfg.packet_lengths} bits")
     print(f"  URLLC Target Error Prob: {urllc_cfg.target_error_probability:.2e}")
     print(f"  Power Upper Bound: {algo_cfg.power_upper_bound:.3f} W")

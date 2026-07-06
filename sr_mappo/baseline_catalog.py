@@ -14,6 +14,11 @@ BASELINE_ALIASES = {
     "force_admit_minloss": "force_admit_minloss_greedy",
     "rate_loss_force_admit": "force_admit_minloss_greedy",
     "sumrate_force_admit": "force_admit_minloss_greedy",
+    "pure_force_admit_globaltp": "pure_force_admit_globaltp_greedy",
+    "force_admit_globaltp": "pure_force_admit_globaltp_greedy",
+    "force_admit_max_global_tp": "pure_force_admit_globaltp_greedy",
+    "pure_globaltp_force_admit": "pure_force_admit_globaltp_greedy",
+    "pure_global_tp_force_admit": "pure_force_admit_globaltp_greedy",
     "myopic": "myopic_throughput_greedy",
     "myopic_tp": "myopic_throughput_greedy",
     "myopic_throughput": "myopic_throughput_greedy",
@@ -48,6 +53,7 @@ VALID_BASELINE_MODES = {
     "throughput_only_greedy",
     "rate_loss_min_greedy",
     "force_admit_minloss_greedy",
+    "pure_force_admit_globaltp_greedy",
     "channel_only_greedy",
     "frozen_json",
 }
@@ -65,6 +71,7 @@ BASELINE_LABELS = {
     "throughput_only_greedy": "Throughput-only Greedy (eMBB-only ceiling)",
     "rate_loss_min_greedy": "Rate-loss-min Greedy (pure-sumrate owner + min-loss admit)",
     "force_admit_minloss_greedy": "Force-admit Min-loss Greedy (pure-sumrate owner + no-KEEP min-loss admit)",
+    "pure_force_admit_globaltp_greedy": "Pure Force-admit Global-TP Greedy (pure-sumrate owner + max global throughput admit)",
     "channel_only_greedy": "Channel-only Greedy",
     "frozen_json": "Frozen Baseline",
 }
@@ -122,6 +129,14 @@ def baseline_metadata(
             "baseline_requires_admission_feasible_set": True,
             "baseline_allows_noop": False,
             "baseline_is_debug_ceiling": False,
+            "baseline_is_main_coexistence_reference": False,
+        })
+    elif normalized == "pure_force_admit_globaltp_greedy":
+        metadata.update({
+            "baseline_objective_type": "pure_force_admit_globaltp_greedy",
+            "baseline_requires_admission_feasible_set": True,
+            "baseline_allows_noop": False,
+            "baseline_is_debug_ceiling": True,
             "baseline_is_main_coexistence_reference": False,
         })
     elif normalized == "myopic_throughput_greedy":
@@ -237,6 +252,22 @@ def baseline_narrative(
             "greedy_admission_role": (
                 "URLLC admission is mandatory whenever a hard-feasible packet/mode pair exists; "
                 "admit actions are ranked only by their global eMBB throughput damage."
+            ),
+            "greedy_noop_policy": (
+                "KEEP/no-op is not part of the comparison set. It is used only as a hard fallback "
+                "when no feasible admit action exists."
+            ),
+        }
+    if normalized == "pure_force_admit_globaltp_greedy":
+        return {
+            "greedy_objective": (
+                "choose the Phase-0 eMBB owner map that maximizes global eMBB sum-rate, "
+                "then force a hard-feasible URLLC admit action that maximizes immediate global eMBB throughput"
+            ),
+            "greedy_admission_role": (
+                "URLLC admission is mandatory whenever a hard-feasible packet/mode pair exists. "
+                "Among feasible admit actions, ranking is pure global throughput first; min-rate, quality, "
+                "inter-cell cost, and mode preference are only secondary tie-breaks."
             ),
             "greedy_noop_policy": (
                 "KEEP/no-op is not part of the comparison set. It is used only as a hard fallback "
